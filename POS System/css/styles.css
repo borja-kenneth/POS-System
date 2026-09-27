@@ -270,3 +270,322 @@ canvas {
   font-size: .78rem;
   margin-top: .5rem;
 }
+/* ---------- Dashboard = physical store checkout (POS register) ---------- */
+.pos-cats {
+  display: flex;
+  gap: .4rem;
+  flex-wrap: wrap;
+  margin-bottom: .8rem;
+}
+
+.postab {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--sub);
+  padding: .35rem .75rem;
+  border-radius: 20px;
+  font-size: .78rem;
+  cursor: pointer;
+}
+
+.postab.on {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.pos-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: .7rem;
+  max-height: 480px;
+  overflow-y: auto;
+  padding: .15rem;
+}
+
+.pos-item {
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: .75rem;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+  position: relative;
+  font-family: inherit;
+  color: var(--ink);
+}
+
+.pos-item:hover:not(:disabled) {
+  border-color: var(--accent);
+}
+
+.pos-item:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+
+.pos-item .pi-name {
+  font-size: .85rem;
+  font-weight: 600;
+  padding-right: 44px;
+  line-height: 1.25;
+}
+
+.pos-item .pi-cat {
+  font-size: .72rem;
+  color: var(--sub);
+}
+
+.pos-item .pi-price {
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-weight: 700;
+  color: var(--accent2);
+  margin-top: auto;
+}
+
+.pi-badge {
+  position: absolute;
+  top: .6rem;
+  right: .6rem;
+  font-size: .62rem;
+  font-weight: 700;
+  padding: .1rem .45rem;
+  border-radius: 10px;
+}
+
+.pi-badge.low {
+  background: color-mix(in srgb, var(--warn) 20%, transparent);
+  color: var(--warn);
+}
+
+.pi-badge.out {
+  background: color-mix(in srgb, var(--bad) 18%, transparent);
+  color: var(--bad);
+}
+
+.pos-cart {
+  display: flex;
+  flex-direction: column;
+}
+
+.pos-lines {
+  max-height: 220px;
+  overflow-y: auto;
+  margin-bottom: .3rem;
+}
+
+.pos-empty {
+  color: var(--sub);
+  font-size: .82rem;
+  text-align: center;
+  padding: 1.3rem .5rem;
+}
+
+.pos-line {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .5rem 0;
+  border-bottom: 1px dashed var(--line);
+  font-size: .85rem;
+}
+
+.pos-line:last-child {
+  border-bottom: 0;
+}
+
+.pos-line .pl-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.pos-line .pl-sub {
+  font-size: .72rem;
+  color: var(--sub);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.pos-qty {
+  display: flex;
+  align-items: center;
+  gap: .35rem;
+}
+
+.pos-qty button {
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: .85rem;
+  line-height: 1;
+}
+
+.pl-remove {
+  background: none;
+  border: 0;
+  color: var(--bad);
+  cursor: pointer;
+  font-size: .9rem;
+}
+
+.pos-voucher {
+  margin: .6rem 0;
+}
+
+.pos-voucher-chip {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: color-mix(in srgb, var(--accent2) 12%, transparent);
+  border: 1px solid var(--accent2);
+  border-radius: 8px;
+  padding: .4rem .6rem;
+  font-size: .78rem;
+  margin-top: .5rem;
+}
+
+.pos-voucher-chip a {
+  color: var(--bad);
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.pos-pay {
+  display: flex;
+  gap: .4rem;
+  margin: .6rem 0;
+}
+
+.pos-pay button {
+  flex: 1;
+  padding: .5rem;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink);
+  cursor: pointer;
+  font-size: .85rem;
+  font-weight: 600;
+}
+
+.pos-pay button.on {
+  background: var(--accent2);
+  border-color: var(--accent2);
+  color: #fff;
+}
+
+.pos-cashrow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: .85rem;
+  margin-bottom: .4rem;
+}
+
+.pos-cashrow input {
+  width: 110px;
+}
+
+/* receipt modal — digital receipt */
+.pos-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(20, 20, 22, .45);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  padding: 1.2rem;
+  z-index: 50;
+}
+
+.pos-overlay.show {
+  display: flex;
+}
+
+.pos-receipt {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  max-width: 320px;
+  width: 100%;
+  padding: 1.3rem;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: .8rem;
+  color: var(--ink);
+  max-height: 85vh;
+  overflow-y: auto;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, .18);
+}
+
+.pos-receipt h3 {
+  text-align: center;
+  font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+  font-size: 1rem;
+  margin: 0 0 .15rem;
+}
+
+.pos-receipt .pr-sub {
+  text-align: center;
+  color: var(--sub);
+  font-size: .7rem;
+  margin-bottom: .8rem;
+}
+
+.pos-receipt .pr-line {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: .25rem;
+}
+
+.pos-receipt hr {
+  border: none;
+  border-top: 1px dashed var(--line);
+  margin: .6rem 0;
+}
+
+.pos-receipt-actions {
+  display: flex;
+  gap: .5rem;
+  margin-top: .7rem;
+}
+
+.pos-receipt-actions button {
+  flex: 1;
+}
+
+.pos-email-row {
+  display: none;
+  gap: .4rem;
+  margin-top: .6rem;
+}
+
+.pos-email-row.show {
+  display: flex;
+}
+
+.pos-email-row input {
+  flex: 1;
+}
+
+.pos-sent {
+  display: none;
+  font-size: .72rem;
+  color: var(--good);
+  margin-top: .4rem;
+  font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.pos-sent.show {
+  display: block;
+}
+
+.pos-receipt .btn.primary-full {
+  width: 100%;
+  margin-top: .8rem;
+}
