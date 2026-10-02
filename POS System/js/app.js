@@ -1,47 +1,80 @@
-// ---------- Mock data ----------
-const CATS = ["Beverages", "Snacks", "Bakery", "Dairy", "Household", "Personal Care"];
-const names = ["House Blend Coffee 250g", "Sparkling Water 500ml", "Oat Milk 1L", "Sea Salt Chips", "Dark Choc Bar", "Sourdough Loaf", "Butter Croissant", "Cheddar Block 200g", "Greek Yogurt Tub", "Dish Soap 750ml", "Paper Towels 2pk", "Shampoo 400ml", "Hand Cream 50ml", "Cola 12pk", "Granola Bars 6pk"];
-function seed(i) { let x = Math.sin(i * 999) * 10000; return x - Math.floor(x); }
-const products = names.map((n, i) => {
-  const cost = +(2 + seed(i) * 18).toFixed(2);
-  const price = +(cost * (1.35 + seed(i + 50) * 0.5)).toFixed(2);
-  const stock = Math.floor(seed(i + 7) * 80);
-  return { id: "SKU" + (1000 + i), name: n, cat: CATS[i % CATS.length], cost, price, stock, reorder: 12 };
-});
+// ---------- API-backed state ----------
+const API_BASE = "api/index.php";
+let CATS = [];
+let categoryIdByName = {};
+let products = [];
+let sales = [];
+let transactions = [];
+let vouchersList = [];
+let VOUCHERS = {};
+let opex = {};
+let totalOpex = 0;
 const today = new Date();
-function fmtDate(d) { return d.toISOString().slice(0, 10); }
-const days = [...Array(14)].map((_, i) => { const d = new Date(today); d.setDate(d.getDate() - (13 - i)); return d; });
-const sales = [];
-days.forEach((d, di) => {
-  const n = 6 + Math.floor(seed(di * 3) * 10);
-  for (let k = 0; k < n; k++) {
-    const p = products[Math.floor(seed(di * 100 + k) * products.length)];
-    const qty = 1 + Math.floor(seed(di * 50 + k) * 4);
-    sales.push({ date: fmtDate(d), sku: p.id, name: p.name, cat: p.cat, qty, price: p.price, cost: p.cost, total: +(qty * p.price).toFixed(2), profit: +(qty * (p.price - p.cost)).toFixed(2) });
-  }
-});
-const opex = { "Rent": 1800, "Wages": 2600, "Utilities": 320, "Marketing": 250, "Misc": 180 };
-const totalOpex = Object.values(opex).reduce((a, b) => a + b, 0);
-const money = n => "₱" + n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const days = [...Array(14)].map((_, i) => { const d = new Date(today); d.setHours(0,0,0,0); d.setDate(d.getDate() - (13 - i)); return d; });
 
-// All figures below are recomputed on every call so that a sale rung up on
-// the Dashboard (checkout) immediately flows into Analytics, Reports and
-// the Sales Ledger — they are never cached from page load.
+function fmtDate(d) { return new Date(d).toISOString().slice(0, 10); }
+const money = n => "₱" + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+async function api(path, options = {}) {
+  const cleanPath = String(path).replace(/^\/+/, '');
+  const response = await fetch(`${API_BASE}?route=${encodeURIComponent(cleanPath)}`, {
+    ...options,
+    headers: { "Content-Type": "application/json", ...(options.headers || {}) }
+  });
+  let data = {};
+  try { data = await response.json(); } catch (_) {}
+  if (!response.ok) throw new Error(data.error || data.detail || `Request failed (${response.status})`);
+  return data;
+}
+
+async function loadData() {
+  const data = await api('/bootstrap');
+  CATS = data.categories.map(c => c.name);
+  categoryIdByName = Object.fromEntries(data.categories.map(c => [c.name, c.id]));
+  products = data.products;
+  sales = data.sales;
+  transactions = data.transactions.map(t => ({ ...t, time: new Date(t.time) }));
+  vouchersList = data.vouchers || [];
+  VOUCHERS = Object.fromEntries(vouchersList.map(v => [v.code, {
+    id: v.id,
+    type: v.type,
+    value: v.value,
+    pct: v.type === 'PERCENTAGE' ? v.value / 100 : 0,
+    label: `${v.code} · ${v.type === 'PERCENTAGE' ? v.value + '%' : money(v.value)} (${v.description || 'Discount'})`,
+    minimumPurchase: Number(v.minimumPurchase || 0)
+  }]));
+  opex = data.expenses || {};
+  totalOpex = Object.values(opex).reduce((a, b) => a + Number(b || 0), 0);
+}
+
+// All figures below are recomputed from database-backed data on every render.
 function computeStats() {
   const salesByDay = days.map(d => {
     const rows = sales.filter(s => s.date === fmtDate(d));
-    return { date: fmtDate(d).slice(5), rev: +rows.reduce((a, r) => a + r.total, 0).toFixed(2), profit: +rows.reduce((a, r) => a + r.profit, 0).toFixed(2), tx: rows.length };
+    const uniqueTx = new Set(rows.map(r => r.transactionId));
+    return {
+      date: fmtDate(d).slice(5),
+      rev: +rows.reduce((a, r) => a + r.total, 0).toFixed(2),
+      profit: +rows.reduce((a, r) => a + r.profit, 0).toFixed(2),
+      tx: uniqueTx.size
+    };
   });
   const totalRev = +sales.reduce((a, r) => a + r.total, 0).toFixed(2);
   const totalProfit = +sales.reduce((a, r) => a + r.profit, 0).toFixed(2);
   const totalCOGS = +(totalRev - totalProfit).toFixed(2);
   const todayRows = sales.filter(s => s.date === fmtDate(today));
+  const todayTxCount = new Set(todayRows.map(r => r.transactionId)).size;
   const netProfit = +(totalProfit - totalOpex).toFixed(2);
   const byProduct = {};
-  sales.forEach(s => { byProduct[s.sku] = byProduct[s.sku] || { name: s.name, qty: 0, rev: 0, profit: 0 }; byProduct[s.sku].qty += s.qty; byProduct[s.sku].rev += s.total; byProduct[s.sku].profit += s.profit; });
+  sales.forEach(s => {
+    byProduct[s.sku] = byProduct[s.sku] || { name: s.name, qty: 0, rev: 0, profit: 0 };
+    byProduct[s.sku].qty += s.qty;
+    byProduct[s.sku].rev += s.total;
+    byProduct[s.sku].profit += s.profit;
+  });
   const topProducts = Object.values(byProduct).sort((a, b) => b.rev - a.rev).slice(0, 6);
   const lowStockCount = products.filter(p => p.stock <= p.reorder).length;
-  return { salesByDay, totalRev, totalProfit, totalCOGS, todayRows, netProfit, byProduct, topProducts, lowStockCount };
+  return { salesByDay, totalRev, totalProfit, totalCOGS, todayRows, todayTxCount, netProfit, byProduct, topProducts, lowStockCount };
 }
 
 // ---------- Checkout (Dashboard) state ----------
@@ -50,12 +83,26 @@ let voucher = null;
 let payMethod = "cash";
 let posQuery = "";
 let posCat = "All";
-let txCounter = 5000;
-const VOUCHERS = {
-  SENIOR20: { pct: 0.20, label: "SENIOR20 · 20% (Senior/PWD discount)" },
-  BULK10: { pct: 0.10, label: "BULK10 · 10% (bulk order)" },
-  WELCOME5: { pct: 0.05, label: "WELCOME5 · 5% (first-time customer)" },
-};
+function lowStockList() { return products.filter(p => p.stock <= p.reorder).sort((a, b) => a.stock - b.stock); }
+async function restockProduct(id) {
+  const p = products.find(x => x.id === id);
+  if (!p) return;
+  const defaultQty = Math.max(p.reorder, 1);
+  const input = prompt(`How many units of ${p.name} would you like to add?`, String(defaultQty));
+  if (input === null) return;
+  const quantity = Number(input);
+  if (!Number.isInteger(quantity) || quantity <= 0) {
+    alert('Please enter a positive whole number.');
+    return;
+  }
+  try {
+    await api(`/inventory/${p.productId}/restock`, { method: 'POST', body: JSON.stringify({ quantity }) });
+    await loadData();
+    render('alerts');
+  } catch (err) {
+    alert(err.message);
+  }
+}
 
 function filteredProducts() {
   const q = posQuery.trim().toLowerCase();
@@ -79,12 +126,17 @@ function posItemsHTML(list) {
   }).join('');
 }
 function cartTotals() {
-  const subtotal = cart.reduce((s, l) => s + l.price * l.qty, 0);
-  const discount = voucher ? subtotal * VOUCHERS[voucher].pct : 0;
+  const subtotal = cart.reduce((sum, l) => sum + l.price * l.qty, 0);
+  const v = voucher ? VOUCHERS[voucher] : null;
+  let discount = 0;
+  if (v && subtotal >= Number(v.minimumPurchase || 0)) {
+    discount = v.type === 'PERCENTAGE' ? subtotal * v.pct : Math.min(subtotal, Number(v.value || 0));
+  }
   const tax = (subtotal - discount) * 0.12;
   const total = subtotal - discount + tax;
   return { subtotal, discount, tax, total };
 }
+
 function cartLinesHTML() {
   if (!cart.length) return `<div class="pos-empty">Tap a product to add it to the sale.</div>`;
   return cart.map(l => `
@@ -107,21 +159,22 @@ function voucherChipHTML() {
   return `<div class="pos-voucher-chip"><span>${VOUCHERS[voucher].label}</span><a onclick="removeVoucher()">Remove</a></div>`;
 }
 function payButtonsHTML() {
-  return `<button class="${payMethod === 'cash' ? 'on' : ''}" onclick="setPay('cash')">Cash</button><button class="${payMethod === 'card' ? 'on' : ''}" onclick="setPay('card')">Card</button>`;
+  return `<button class="${payMethod === 'cash' ? 'on' : ''}" onclick="setPay('cash')">Cash</button><button class="${payMethod === 'card' ? 'on' : ''}" onclick="setPay('card')">Card</button><button class="${payMethod === 'paymongo' ? 'on' : ''}" onclick="setPay('paymongo')">Online</button>`;
 }
 function cashRowHTML() {
-  if (payMethod !== 'cash') return '';
-  return `<div class="pos-cashrow"><span>Cash tendered</span><input id="cashGiven" placeholder="0.00" oninput="onCashInput()"></div>`;
+  if (payMethod === 'cash') return `<div class="pos-cashrow"><span>Cash received</span><input id="cashGiven" placeholder="0.00" inputmode="decimal" oninput="onCashInput()"></div>`;
+  if (payMethod === 'paymongo') return `<div class="payment-note"><strong>Online payment</strong><span>PayMongo checkout · GCash, Maya, or card</span></div>`;
+  return '';
 }
 function checkoutBtnState() {
   const { total } = cartTotals();
   const cashGiven = parseFloat(document.getElementById('cashGiven')?.value) || 0;
-  const canCheckout = cart.length > 0 && (payMethod === 'card' || cashGiven >= total);
+  const canCheckout = cart.length > 0 && (payMethod !== 'cash' || cashGiven >= total);
   const btn = document.getElementById('checkoutBtn');
   if (!btn) return;
   btn.disabled = !canCheckout;
-  btn.style.opacity = canCheckout ? 1 : .45;
-  btn.textContent = (payMethod === 'cash' && cashGiven > 0) ? `Charge · Change ${money(Math.max(cashGiven - total, 0))}` : 'Charge';
+  btn.classList.toggle('ready', canCheckout);
+  btn.textContent = cart.length ? `Charge ${money(total)}` : 'Charge';
 }
 function refreshCartPanel() {
   document.getElementById('posLines').innerHTML = cartLinesHTML();
@@ -129,7 +182,10 @@ function refreshCartPanel() {
   document.getElementById('voucherApplied').innerHTML = voucherChipHTML();
   document.getElementById('posPay').innerHTML = payButtonsHTML();
   document.getElementById('posCashRow').innerHTML = cashRowHTML();
-  const cc = document.getElementById('cartCount'); if (cc) cc.textContent = cart.reduce((a, l) => a + l.qty, 0);
+  const count = cart.reduce((a, l) => a + l.qty, 0);
+  const cc = document.getElementById('cartCount'); if (cc) cc.textContent = count;
+  const label = document.getElementById('cartCountLabel'); if (label) label.textContent = count;
+  const clear = document.querySelector('.ghost-btn'); if (clear) clear.disabled = count === 0;
   checkoutBtnState();
 }
 function onCashInput() { checkoutBtnState(); }
@@ -160,10 +216,20 @@ function clearCart() { cart = []; voucher = null; refreshCartPanel(); document.g
 function applyVoucher() {
   const input = document.getElementById('voucherInput');
   const code = input.value.trim().toUpperCase();
-  if (VOUCHERS[code]) voucher = code;
-  else { voucher = null; alert("Invalid code. Try SENIOR20, BULK10, or WELCOME5."); }
+  const v = VOUCHERS[code];
+  const subtotal = cart.reduce((sum, l) => sum + l.price * l.qty, 0);
+  if (v && subtotal >= Number(v.minimumPurchase || 0)) {
+    voucher = code;
+  } else if (v) {
+    voucher = null;
+    alert(`${code} requires a minimum purchase of ${money(v.minimumPurchase)}.`);
+  } else {
+    voucher = null;
+    alert('Invalid or inactive voucher code.');
+  }
   refreshCartPanel();
 }
+
 function removeVoucher() { voucher = null; refreshCartPanel(); }
 function setPay(m) { payMethod = m; refreshCartPanel(); }
 
@@ -173,41 +239,58 @@ function refreshDashboardKPIs() {
   const revEl = document.getElementById('kpiTodayRev');
   if (revEl) {
     revEl.textContent = money(todayRev);
-    document.getElementById('kpiTodayTx').textContent = stats.todayRows.length + ' transactions';
+    document.getElementById('kpiTodayTx').textContent = stats.todayTxCount + ' transactions';
     document.getElementById('kpiLowStock').textContent = stats.lowStockCount;
   }
 }
 
-function finalizeSale() {
-  const { subtotal, discount, tax, total } = cartTotals();
+async function finalizeSale() {
+  if (!cart.length) return;
+  const { total } = cartTotals();
   const cashGiven = parseFloat(document.getElementById('cashGiven')?.value) || 0;
-  const change = payMethod === 'cash' ? Math.max(cashGiven - total, 0) : 0;
-  const pct = voucher ? VOUCHERS[voucher].pct : 0;
+  if (payMethod === 'cash' && cashGiven < total) {
+    alert(`Cash received must be at least ${money(total)}.`);
+    return;
+  }
 
-  const receiptLines = cart.map(l => {
-    const effPrice = +(l.price * (1 - pct)).toFixed(2);
-    const lineTotal = +(l.qty * effPrice).toFixed(2);
-    // record the sale into the shared ledger — this is what makes
-    // Analytics, Reports and the Sales Ledger update automatically
-    sales.push({ date: fmtDate(today), sku: l.id, name: l.name, cat: l.cat, qty: l.qty, price: effPrice, cost: l.cost, total: lineTotal, profit: +(lineTotal - l.qty * l.cost).toFixed(2) });
-    const prod = products.find(p => p.id === l.id);
-    if (prod) prod.stock = Math.max(prod.stock - l.qty, 0);
-    return { name: l.name, qty: l.qty, price: effPrice, lineTotal };
-  });
+  const checkoutBtn = document.getElementById('checkoutBtn');
+  if (checkoutBtn) {
+    checkoutBtn.disabled = true;
+    checkoutBtn.textContent = 'Saving…';
+  }
 
-  const tx = { id: ++txCounter, time: new Date(), lines: receiptLines, subtotal, discount, tax, total, payMethod, cashGiven, change, voucher };
-  showReceipt(tx);
-  cart = []; voucher = null;
-  refreshCartPanel();
-  document.getElementById('posCats').innerHTML = catButtonsHTML();
-  document.getElementById('posGrid').innerHTML = posItemsHTML(filteredProducts());
-  refreshDashboardKPIs();
+  try {
+    const response = await api('/transactions', {
+      method: 'POST',
+      body: JSON.stringify({
+        items: cart.map(l => ({ productId: l.productId, quantity: l.qty })),
+        voucherCode: voucher,
+        paymentMethod: payMethod === 'paymongo' ? 'ONLINE' : payMethod.toUpperCase(),
+        cashReceived: payMethod === 'cash' ? cashGiven : null
+      })
+    });
+
+    await loadData();
+    const tx = transactions.find(t => t.id === response.transaction.id) || { ...response.transaction, time: new Date(response.transaction.time) };
+    cart = [];
+    voucher = null;
+    showReceipt(tx);
+    refreshCartPanel();
+    const cats = document.getElementById('posCats');
+    const grid = document.getElementById('posGrid');
+    if (cats) cats.innerHTML = catButtonsHTML();
+    if (grid) grid.innerHTML = posItemsHTML(filteredProducts());
+    refreshDashboardKPIs();
+  } catch (err) {
+    alert(`Could not complete the sale: ${err.message}`);
+    checkoutBtnState();
+  }
 }
-
+function payLabel(m) { return m === 'paymongo' ? 'ONLINE PAYMENT' : m.toUpperCase(); }
 function receiptHTML(tx) {
   return `
     <h3>Til · POS Console</h3>
-    <div class="pr-sub">Receipt #${tx.id} · ${tx.time.toLocaleString()}</div>
+    <div class="pr-sub">Receipt #${tx.receiptNumber || tx.id} · ${tx.time.toLocaleString()}</div>
     ${tx.lines.map(l => `<div class="pr-line"><span>${l.qty}× ${l.name}</span><span>${money(l.lineTotal)}</span></div>`).join('')}
     <hr>
     <div class="pr-line"><span>Subtotal</span><span>${money(tx.subtotal)}</span></div>
@@ -215,11 +298,11 @@ function receiptHTML(tx) {
     <div class="pr-line"><span>VAT (12%)</span><span>${money(tx.tax)}</span></div>
     <div class="pr-line" style="font-weight:700"><span>TOTAL</span><span>${money(tx.total)}</span></div>
     <hr>
-    <div class="pr-line"><span>Paid via</span><span>${tx.payMethod.toUpperCase()}</span></div>
+    <div class="pr-line"><span>Paid via</span><span>${payLabel(tx.payMethod)}</span></div>
     ${tx.payMethod === 'cash' ? `<div class="pr-line"><span>Tendered</span><span>${money(tx.cashGiven)}</span></div><div class="pr-line"><span>Change</span><span>${money(tx.change)}</span></div>` : ''}`;
 }
 function receiptText(tx) {
-  let l = ["TIL · POS CONSOLE", `Receipt #${tx.id}`, tx.time.toLocaleString(), '------------------------'];
+  let l = ["TIL · POS CONSOLE", `Receipt #${tx.receiptNumber || tx.id}`, tx.time.toLocaleString(), '------------------------'];
   tx.lines.forEach(i => l.push(`${i.qty}x ${i.name}  ${money(i.lineTotal)}`));
   l.push('------------------------');
   l.push(`Subtotal  ${money(tx.subtotal)}`);
@@ -227,42 +310,48 @@ function receiptText(tx) {
   l.push(`VAT 12%   ${money(tx.tax)}`);
   l.push(`TOTAL     ${money(tx.total)}`);
   l.push('------------------------');
-  l.push(`Paid via  ${tx.payMethod.toUpperCase()}`);
+  l.push(`Paid via  ${payLabel(tx.payMethod)}`);
   if (tx.payMethod === 'cash') { l.push(`Tendered  ${money(tx.cashGiven)}`); l.push(`Change    ${money(tx.change)}`); }
   l.push('Thank you!');
   return l.join('\n');
 }
-function showReceipt(tx) {
+function showReceipt(tx, readonly) {
   document.getElementById('posReceiptBody').innerHTML = receiptHTML(tx) + `
     <div class="pos-receipt-actions">
       <button class="btn" onclick="downloadReceipt(${tx.id})">Download</button>
       <button class="btn" style="background:var(--accent2)" onclick="toggleEmailRow(${tx.id})">Email</button>
     </div>
     <div class="pos-email-row" id="emailRow-${tx.id}"><input type="email" id="emailInput-${tx.id}" placeholder="name@email.com"><button class="btn" onclick="sendEmailReceipt(${tx.id})">Send</button></div>
-    <div class="pos-sent" id="sentMsg-${tx.id}">Digital receipt sent (demo — no email is actually dispatched).</div>
-    <button class="btn primary-full" onclick="closeReceipt()">New sale</button>`;
-  window.__lastReceipt = tx;
+    <div class="pos-sent" id="sentMsg-${tx.id}">Digital receipt delivery is not configured yet. Use the field below to record a delivery request.</div>
+    <button class="btn primary-full" onclick="closeReceipt()">${readonly ? 'Close' : 'New sale'}</button>`;
   document.getElementById('posOverlay').classList.add('show');
 }
 function toggleEmailRow(id) { document.getElementById('emailRow-' + id).classList.toggle('show'); }
-function sendEmailReceipt(id) {
+async function sendEmailReceipt(id) {
   const val = document.getElementById('emailInput-' + id).value.trim();
   if (!val) return;
-  const msg = document.getElementById('sentMsg-' + id);
-  msg.textContent = `Digital receipt sent to ${val} (demo — no email is actually dispatched).`;
-  msg.classList.add('show');
+  try {
+    const result = await api(`/transactions/${id}/digital-receipt`, {
+      method: 'POST', body: JSON.stringify({ email: val })
+    });
+    const msg = document.getElementById('sentMsg-' + id);
+    msg.textContent = result.message || `Digital receipt request recorded for ${val}.`;
+    msg.classList.add('show');
+  } catch (err) {
+    alert(err.message);
+  }
 }
 async function downloadReceipt(id) {
-  const tx = window.__lastReceipt && window.__lastReceipt.id === id ? window.__lastReceipt : null;
+  const tx = transactions.find(t => t.id === id);
   if (!tx) return;
   const text = receiptText(tx);
   try {
     const downloads = await claude.use("downloads");
-    if (downloads) { await downloads.save({ filename: `receipt-${id}.txt`, data: text }); return; }
+    if (downloads) { await downloads.save({ filename: `receipt-${tx.receiptNumber || id}.txt`, data: text }); return; }
   } catch (e) { /* fall through to blob download */ }
   const blob = new Blob([text], { type: 'text/plain' });
   const url = URL.createObjectURL(blob);
-  const a = document.createElement('a'); a.href = url; a.download = `receipt-${id}.txt`; a.click();
+  const a = document.createElement('a'); a.href = url; a.download = `receipt-${tx.receiptNumber || id}.txt`; a.click();
   URL.revokeObjectURL(url);
 }
 function closeReceipt() { document.getElementById('posOverlay').classList.remove('show'); }
@@ -272,39 +361,96 @@ const views = {
   dashboard() {
     const stats = computeStats();
     const todayRev = stats.todayRows.reduce((a, r) => a + r.total, 0);
+    const cartCount = cart.reduce((a, l) => a + l.qty, 0);
     return `
-    <div class="sec grid g4">
-      <div class="card kpi"><div class="l">Revenue today</div><div class="v num" id="kpiTodayRev">${money(todayRev)}</div><div class="d" id="kpiTodayTx">${stats.todayRows.length} transactions</div></div>
-      <div class="card kpi"><div class="l">Items in cart</div><div class="v num" id="cartCount">${cart.reduce((a, l) => a + l.qty, 0)}</div><div class="d">Current sale</div></div>
-      <div class="card kpi"><div class="l">Low stock items</div><div class="v num down" id="kpiLowStock">${stats.lowStockCount}</div><div class="d">need reordering</div></div>
-      <div class="card kpi"><div class="l">Register</div><div class="v" style="font-size:1.05rem">Front counter</div><div class="d">Open · ${payMethod === 'cash' ? 'Cash drawer' : 'Card terminal'} ready</div></div>
+    <div class="page-head checkout-head">
+      <div>
+        <div class="eyebrow">PHYSICAL STORE</div>
+        <h1>Checkout</h1>
+        <p>Ring up customer purchases at the front counter.</p>
+      </div>
+      <div class="register-status"><span class="status-dot"></span><span>Register open</span><strong>Front counter</strong></div>
     </div>
-    <div class="sec grid g2">
-      <div class="card">
-        <div class="toolbar">
-          <h2 style="margin:0">Ring up a sale — ${products.length} SKUs</h2>
-          <input placeholder="Search product or SKU" value="${posQuery}" oninput="setPosQuery(this.value)">
+
+    <div class="sec grid g3">
+      <div class="card kpi compact"><div class="l">Today's sales</div><div class="v num" id="kpiTodayRev">${money(todayRev)}</div><div class="d" id="kpiTodayTx">${stats.todayTxCount} transactions</div></div>
+      <div class="card kpi compact"><div class="l">Low stock</div><div class="v num ${stats.lowStockCount ? 'down' : 'up'}" id="kpiLowStock">${stats.lowStockCount}</div><div class="d">${stats.lowStockCount ? 'items need attention' : 'All stock levels healthy'}</div></div>
+      <div class="card kpi compact"><div class="l">Current sale</div><div class="v num" id="cartCount">${cartCount}</div><div class="d">items in cart</div></div>
+    </div>
+
+    <div class="sec grid pos-layout">
+      <section class="card pos-products">
+        <div class="section-head">
+          <div><h2>Products</h2><span class="section-meta">${products.length} SKUs available</span></div>
+          <div class="search-wrap"><span class="search-icon">⌕</span><input aria-label="Search products" placeholder="Search product or SKU" value="${posQuery}" oninput="setPosQuery(this.value)"></div>
         </div>
         <div class="pos-cats" id="posCats">${catButtonsHTML()}</div>
         <div class="pos-grid" id="posGrid">${posItemsHTML(filteredProducts())}</div>
-      </div>
-      <div class="card pos-cart">
-        <h2>Current sale</h2>
+      </section>
+
+      <section class="card pos-cart">
+        <div class="section-head cart-head">
+          <div><h2>Current sale</h2><span class="section-meta"><span id="cartCountLabel">${cartCount}</span> ${cartCount === 1 ? 'item' : 'items'}</span></div>
+          <button class="ghost-btn" onclick="clearCart()" ${cart.length ? '' : 'disabled'}>Clear</button>
+        </div>
         <div class="pos-lines" id="posLines">${cartLinesHTML()}</div>
         <div id="posTotals">${totalsHTML()}</div>
         <div class="pos-voucher">
-          <div class="toolbar" style="margin-bottom:.3rem">
-            <input id="voucherInput" placeholder="Voucher code" style="flex:1">
-            <button class="btn" style="background:var(--accent2)" onclick="applyVoucher()">Apply</button>
+          <label for="voucherInput" class="field-label">Discount / voucher</label>
+          <div class="inline-field">
+            <input id="voucherInput" placeholder="Enter code">
+            <button class="btn secondary" onclick="applyVoucher()">Apply</button>
           </div>
-          <div class="hint">Try SENIOR20, BULK10, or WELCOME5</div>
           <div id="voucherApplied">${voucherChipHTML()}</div>
         </div>
-        <div class="pos-pay" id="posPay">${payButtonsHTML()}</div>
-        <div id="posCashRow">${cashRowHTML()}</div>
-        <button class="btn" id="checkoutBtn" style="width:100%;margin-top:.5rem" onclick="finalizeSale()">Charge</button>
-        <div class="hint"><a href="javascript:void(0)" onclick="clearCart()">Clear sale</a></div>
-      </div>
+        <div class="payment-section">
+          <div class="field-label">Payment method</div>
+          <div class="pos-pay" id="posPay">${payButtonsHTML()}</div>
+          <div id="posCashRow">${cashRowHTML()}</div>
+        </div>
+        <button class="btn checkout-btn" id="checkoutBtn" onclick="finalizeSale()">Charge ${cart.length ? money(cartTotals().total) : ''}</button>
+        <div class="checkout-hint">Complete the sale to update inventory and sales records.</div>
+      </section>
+    </div>`;
+  },
+  alerts() {
+    const low = lowStockList();
+    const out = low.filter(p => p.stock === 0);
+    const atRisk = +low.reduce((a, p) => a + p.stock * p.cost, 0).toFixed(2);
+    return `
+    ${inventorySubnav('alerts')}
+    <div class="page-head"><div><div class="eyebrow">INVENTORY</div><h1>Low stock alerts</h1><p>Items at or below their reorder point.</p></div></div>
+    <div class="sec grid g4">
+      <div class="card kpi compact"><div class="l">Out of stock</div><div class="v num ${out.length ? 'down' : 'up'}">${out.length}</div><div class="d">${out.length ? 'need immediate reorder' : 'None'}</div></div>
+      <div class="card kpi compact"><div class="l">Low stock</div><div class="v num">${low.length - out.length}</div><div class="d">at or below reorder point</div></div>
+      <div class="card kpi compact"><div class="l">SKUs flagged</div><div class="v num">${low.length}</div><div class="d">of ${products.length} total</div></div>
+      <div class="card kpi compact"><div class="l">Stock value</div><div class="v num">${money(atRisk)}</div><div class="d">current value of flagged stock</div></div>
+    </div>
+    ${low.length ? `<div class="alert-banner ${out.length ? 'crit' : ''}"><strong>${out.length ? 'Immediate attention:' : 'Attention:'}</strong> ${out.length ? out.length + ' item(s) are out of stock. ' : ''}${low.length} item(s) are at or below the reorder point.</div>` : ''}
+    <div class="card">
+      <div class="section-head table-head"><div><h2>Items needing attention</h2><span class="section-meta">Review and restock as needed.</span></div></div>
+      <div class="tw"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Stock</th><th>Reorder pt.</th><th>Status</th><th></th></tr></thead><tbody>
+      ${low.length ? low.map(p => `<tr><td>${p.id}</td><td><strong>${p.name}</strong></td><td>${p.cat}</td><td class="num">${p.stock}</td><td class="num">${p.reorder}</td><td><span class="tag ${p.stock === 0 ? 'out' : 'low'}">${p.stock === 0 ? 'Out of stock' : 'Low stock'}</span></td><td class="action-cell"><button class="btn secondary" onclick="restockProduct('${p.id}')">Restock</button></td></tr>`).join('') : `<tr><td colspan="7" class="empty-state">All stock levels are healthy — nothing needs restocking right now.</td></tr>`}
+      </tbody></table></div>
+    </div>`;
+  },
+  history() {
+    return `
+    ${salesSubnav('history')}
+    <div class="page-head"><div><div class="eyebrow">SALES</div><h1>Transaction history</h1><p>Completed checkout transactions and their receipt details.</p></div></div>
+    <div class="card">
+      <div class="section-head table-head"><div><h2>Recent transactions</h2><span class="section-meta">${transactions.length} recent transactions loaded from the database</span></div></div>
+      <div class="tw"><table><thead><tr><th>Receipt #</th><th>Time</th><th>Items</th><th>Payment</th><th>Voucher</th><th>Total</th><th></th></tr></thead><tbody>
+      ${transactions.length ? transactions.map(t => `<tr>
+          <td><strong>${t.receiptNumber || "#" + t.id}</strong></td>
+          <td>${t.time.toLocaleString()}</td>
+          <td>${t.lines.map(l => l.qty + '× ' + l.name).join(', ')}</td>
+          <td><span class="tag ${t.payMethod}">${payLabel(t.payMethod)}</span></td>
+          <td>${t.voucher || '—'}</td>
+          <td class="num"><strong>${money(t.total)}</strong></td>
+          <td class="action-cell"><button class="btn" onclick='showReceipt(transactions.find(x=>x.id===${t.id}), true)'>View receipt</button></td>
+        </tr>`).join('') : `<tr><td colspan="7" class="empty-state">No transactions yet. Completed charges from Checkout will appear here.</td></tr>`}
+      </tbody></table></div>
     </div>`;
   },
   analytics() {
@@ -313,41 +459,68 @@ const views = {
     const wk2 = stats.salesByDay.slice(7, 14).reduce((a, d) => a + d.rev, 0);
     const trend = wk1 ? (((wk2 - wk1) / wk1) * 100).toFixed(1) : "0.0";
     return `
+    <div class="page-head"><div><div class="eyebrow">INSIGHTS</div><h1>Analytics</h1><p>Understand sales performance, product demand, and category trends.</p></div><span class="period-pill">Last 14 days</span></div>
     <div class="sec grid g4">
-      <div class="card kpi"><div class="l">Revenue (14d)</div><div class="v num">${money(stats.totalRev)}</div><div class="d ${trend >= 0 ? 'up' : 'down'}">${trend >= 0 ? '▲' : '▼'} ${Math.abs(trend)}% vs prior week</div></div>
-      <div class="card kpi"><div class="l">Gross Profit</div><div class="v num">${money(stats.totalProfit)}</div><div class="d">${((stats.totalProfit / stats.totalRev) * 100).toFixed(1)}% margin</div></div>
-      <div class="card kpi"><div class="l">Transactions today</div><div class="v num">${stats.todayRows.length}</div><div class="d">${money(stats.todayRows.reduce((a, r) => a + r.total, 0))} sold</div></div>
-      <div class="card kpi"><div class="l">Low stock items</div><div class="v num">${stats.lowStockCount}</div><div class="d down">need reordering</div></div>
+      <div class="card kpi compact"><div class="l">Revenue</div><div class="v num">${money(stats.totalRev)}</div><div class="d ${trend >= 0 ? 'up' : 'down'}">${trend >= 0 ? '▲' : '▼'} ${Math.abs(trend)}% vs prior week</div></div>
+      <div class="card kpi compact"><div class="l">Gross profit</div><div class="v num">${money(stats.totalProfit)}</div><div class="d">${stats.totalRev ? ((stats.totalProfit / stats.totalRev) * 100).toFixed(1) : '0.0'}% margin</div></div>
+      <div class="card kpi compact"><div class="l">Transactions today</div><div class="v num">${stats.todayTxCount}</div><div class="d">${money(stats.todayRows.reduce((a, r) => a + r.total, 0))} sold</div></div>
+      <div class="card kpi compact"><div class="l">Low stock</div><div class="v num ${stats.lowStockCount ? 'down' : 'up'}">${stats.lowStockCount}</div><div class="d">${stats.lowStockCount ? 'need reordering' : 'No alerts'}</div></div>
     </div>
     <div class="sec grid g2">
-      <div class="card"><h2>Revenue &amp; profit, last 14 days</h2><canvas id="trendChart"></canvas></div>
-      <div class="card"><h2>Top products by revenue</h2><canvas id="topChart"></canvas></div>
+      <div class="card chart-card"><div class="chart-title"><h2>Revenue &amp; profit</h2><span class="section-meta">14-day trend</span></div><canvas id="trendChart"></canvas></div>
+      <div class="card chart-card"><div class="chart-title"><h2>Top products</h2><span class="section-meta">By revenue</span></div><canvas id="topChart"></canvas></div>
     </div>
-    <div class="sec card"><h2>Sales by category</h2><canvas id="catChart" style="max-height:220px"></canvas></div>`;
+    <div class="sec card chart-card"><div class="chart-title"><h2>Sales by category</h2><span class="section-meta">Revenue distribution</span></div><canvas id="catChart" style="max-height:240px"></canvas></div>`;
   },
   inventory() {
     const rows = products.map(p => {
       const status = p.stock === 0 ? 'out' : p.stock <= p.reorder ? 'low' : 'ok';
-      return `<tr><td>${p.id}</td><td>${p.name}</td><td>${p.cat}</td><td class="num">${p.stock}</td><td class="num">${money(p.cost)}</td><td class="num">${money(p.price)}</td><td><span class="tag ${status}">${status === 'ok' ? 'In stock' : status === 'low' ? 'Low' : 'Out'}</span></td></tr>`;
+      return `<tr><td>${p.id}</td><td><strong>${p.name}</strong></td><td>${p.cat}</td><td class="num stock-value">${p.stock}</td><td class="num">${money(p.cost)}</td><td class="num"><strong>${money(p.price)}</strong></td><td><span class="tag ${status}">${status === 'ok' ? 'In stock' : status === 'low' ? 'Low stock' : 'Out of stock'}</span></td></tr>`;
     }).join('');
-    return `<div class="card"><div class="toolbar"><h2 style="margin:0">Central stock inventory — ${products.length} SKUs</h2><input placeholder="Search product or SKU" oninput="filterInv(this.value)"></div>
-    <div class="tw"><table id="invTable"><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Stock</th><th>Cost</th><th>Price</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    return `
+    ${inventorySubnav('inventory')}
+    <div class="page-head"><div><div class="eyebrow">INVENTORY</div><h1>Central stock</h1><p>One inventory view for products sold in-store and through e-commerce.</p></div></div>
+    <div class="card">
+      <div class="toolbar table-toolbar"><div><h2>Stock inventory</h2><span class="section-meta">${products.length} SKUs</span></div><div class="search-wrap compact-search"><span class="search-icon">⌕</span><input placeholder="Search product or SKU" aria-label="Search inventory" oninput="filterInv(this.value)"></div></div>
+      <div class="tw"><table id="invTable"><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Stock</th><th>Cost</th><th>Price</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>
+    </div>`;
   },
   ledger() {
-    const rows = [...sales].reverse().slice(0, 40).map(s => `<tr><td>${s.date}</td><td>${s.sku}</td><td>${s.name}</td><td class="num">${s.qty}</td><td class="num">${money(s.price)}</td><td class="num">${money(s.total)}</td><td class="num up">${money(s.profit)}</td></tr>`).join('');
-    return `<div class="card"><h2>Daily sales ledger — ${sales.length} transactions over 14 days</h2>
-    <div class="tw"><table><thead><tr><th>Date</th><th>SKU</th><th>Item</th><th>Qty</th><th>Price</th><th>Total</th><th>Profit</th></tr></thead><tbody>${rows}</tbody></table></div>
-    <div class="hint">Showing most recent 40 of ${sales.length} entries. New sales rung up on the Dashboard appear here instantly.</div></div>`;
+    const rows = [...sales].reverse().slice(0, 40).map(s => `<tr><td>${s.date}</td><td>${s.sku}</td><td><strong>${s.name}</strong></td><td class="num">${s.qty}</td><td class="num">${money(s.price)}</td><td class="num"><strong>${money(s.total)}</strong></td><td class="num up">${money(s.profit)}</td></tr>`).join('');
+    return `
+    ${salesSubnav('ledger')}
+    <div class="page-head"><div><div class="eyebrow">SALES</div><h1>Daily sales ledger</h1><p>Line-level record of items sold across the store.</p></div></div>
+    <div class="card">
+      <div class="section-head table-head"><div><h2>Sales entries</h2><span class="section-meta">${sales.length} line entries across 14 days</span></div></div>
+      <div class="tw"><table><thead><tr><th>Date</th><th>SKU</th><th>Item</th><th>Qty</th><th>Price</th><th>Total</th><th>Profit</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="table-footnote">Showing the 40 most recent entries. New completed sales from Checkout appear here.</div>
+    </div>`;
   },
   products() {
-    const rows = products.map(p => `<tr><td>${p.id}</td><td>${p.name}</td><td><select>${CATS.map(c => `<option ${c === p.cat ? 'selected' : ''}>${c}</option>`).join('')}</select></td><td><input class="num" style="width:70px" value="${p.cost}"></td><td><input class="num" style="width:70px" value="${p.price}"></td><td><input class="num" style="width:60px" value="${p.stock}"></td><td><button class="btn" style="background:var(--accent2)">Save</button></td></tr>`).join('');
-    return `<div class="card"><div class="toolbar"><h2 style="margin:0">Product management</h2><button class="btn" onclick="alert('Add-product form would open here.')">+ Add product</button></div>
-    <div class="tw"><table><thead><tr><th>SKU</th><th>Name</th><th>Category</th><th>Cost</th><th>Price</th><th>Stock</th><th></th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+    const rows = products.map(p => {
+      const status = p.stock === 0 ? 'out' : p.stock <= p.reorder ? 'low' : 'ok';
+      return `<tr data-product-row="${p.productId}"><td>${p.id}</td><td><strong>${p.name}</strong></td>
+        <td><select id="product-category-${p.productId}">${CATS.map(c => `<option value="${categoryIdByName[c]}" ${c === p.cat ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
+        <td><input id="product-cost-${p.productId}" class="num compact-input" type="number" min="0" step="0.01" value="${p.cost}"></td>
+        <td><input id="product-price-${p.productId}" class="num compact-input" type="number" min="0" step="0.01" value="${p.price}"></td>
+        <td><input id="product-reorder-${p.productId}" class="num compact-input" type="number" min="0" step="1" value="${p.reorder}"></td>
+        <td class="num">${p.stock}</td><td><span class="tag ${status}">${status === 'ok' ? 'Active' : status === 'low' ? 'Low stock' : 'Out of stock'}</span></td>
+        <td class="action-cell"><button class="btn secondary" onclick="saveProductRow(${p.productId})">Save</button></td></tr>`;
+    }).join('');
+    return `
+    ${inventorySubnav('products')}
+    <div class="page-head"><div><div class="eyebrow">INVENTORY</div><h1>Product management</h1><p>Maintain product details. Stock quantities are managed in Central stock.</p></div><button class="btn" onclick="addProduct()">+ Add product</button></div>
+    <div class="card">
+      <div class="toolbar table-toolbar"><div><h2>Products</h2><span class="section-meta">Edit category, cost, price, and reorder point.</span></div><div class="search-wrap compact-search"><span class="search-icon">⌕</span><input placeholder="Search product or SKU" aria-label="Search products" oninput="filterProducts(this.value)"></div></div>
+      <div class="tw"><table id="productTable"><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Cost</th><th>Price</th><th>Reorder</th><th>Stock</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+    </div>`;
   },
   reports() {
     const stats = computeStats();
-    return `<div class="grid g2">
-    <div class="card"><h2>Profit &amp; Loss — trailing 14 days</h2>
+    return `
+    <div class="page-head"><div><div class="eyebrow">REPORTING</div><h1>Reports</h1><p>Financial and operational summaries for the current reporting period.</p></div><span class="period-pill">Trailing 14 days</span></div>
+    <div class="grid g2">
+    <div class="card"><div class="section-head"><div><h2>Profit &amp; Loss</h2><span class="section-meta">Trailing 14 days</span></div></div>
       <div class="plrow"><span>Gross sales revenue</span><span class="num">${money(stats.totalRev)}</span></div>
       <div class="plrow"><span>Cost of goods sold</span><span class="num down">-${money(stats.totalCOGS)}</span></div>
       <div class="plrow total"><span>Gross profit</span><span class="num">${money(stats.totalProfit)}</span></div>
@@ -355,35 +528,90 @@ const views = {
       <div class="plrow"><span>Total operating expenses</span><span class="num down">-${money(totalOpex)}</span></div>
       <div class="plrow total"><span>Net profit</span><span class="num ${stats.netProfit >= 0 ? 'up' : 'down'}">${money(stats.netProfit)}</span></div>
     </div>
-    <div class="card"><h2>Report summary</h2>
-      <div class="plrow"><span>Net margin</span><span class="num">${((stats.netProfit / stats.totalRev) * 100).toFixed(1)}%</span></div>
-      <div class="plrow"><span>Avg. transaction value</span><span class="num">${money(stats.totalRev / sales.length)}</span></div>
+    <div class="card"><div class="section-head"><div><h2>Report summary</h2><span class="section-meta">Key operating figures</span></div></div>
+      <div class="plrow"><span>Net margin</span><span class="num">${stats.totalRev ? ((stats.netProfit / stats.totalRev) * 100).toFixed(1) : '0.0'}%</span></div>
+      <div class="plrow"><span>Avg. transaction value</span><span class="num">${money(sales.length ? stats.totalRev / new Set(sales.map(s => s.transactionId)).size : 0)}</span></div>
       <div class="plrow"><span>Units sold</span><span class="num">${sales.reduce((a, s) => a + s.qty, 0)}</span></div>
       <div class="plrow"><span>Inventory value on hand</span><span class="num">${money(products.reduce((a, p) => a + p.stock * p.cost, 0))}</span></div>
       <div class="plrow"><span>SKUs below reorder point</span><span class="num down">${stats.lowStockCount}</span></div>
     </div></div>
-    <div class="sec"></div>
-    <div class="card"><h2>Daily sales report — today</h2>
-      <div class="grid g4" style="margin-bottom:.9rem">
-        <div><div class="l" style="color:var(--sub);font-size:.78rem">Revenue</div><div class="num" style="font-weight:700">${money(stats.todayRows.reduce((a, r) => a + r.total, 0))}</div></div>
-        <div><div class="l" style="color:var(--sub);font-size:.78rem">Transactions</div><div class="num" style="font-weight:700">${stats.todayRows.length}</div></div>
-        <div><div class="l" style="color:var(--sub);font-size:.78rem">Items sold</div><div class="num" style="font-weight:700">${stats.todayRows.reduce((a, r) => a + r.qty, 0)}</div></div>
-        <div><div class="l" style="color:var(--sub);font-size:.78rem">Profit</div><div class="num" style="font-weight:700">${money(stats.todayRows.reduce((a, r) => a + r.profit, 0))}</div></div>
+    <div class="sec card"><div class="section-head"><div><h2>Daily sales report</h2><span class="section-meta">Today</span></div></div>
+      <div class="mini-stat-grid">
+        <div><span>Revenue</span><strong class="num">${money(stats.todayRows.reduce((a, r) => a + r.total, 0))}</strong></div>
+        <div><span>Transactions</span><strong class="num">${stats.todayTxCount}</strong></div>
+        <div><span>Items sold</span><strong class="num">${stats.todayRows.reduce((a, r) => a + r.qty, 0)}</strong></div>
+        <div><span>Profit</span><strong class="num">${money(stats.todayRows.reduce((a, r) => a + r.profit, 0))}</strong></div>
       </div>
       <div class="tw"><table><thead><tr><th>SKU</th><th>Item</th><th>Qty</th><th>Total</th></tr></thead><tbody>
-      ${stats.todayRows.length ? [...stats.todayRows].reverse().map(r => `<tr><td>${r.sku}</td><td>${r.name}</td><td class="num">${r.qty}</td><td class="num">${money(r.total)}</td></tr>`).join('') : `<tr><td colspan="4" class="hint">No sales rung up today yet — use the Dashboard to check out a sale.</td></tr>`}
+      ${stats.todayRows.length ? [...stats.todayRows].reverse().map(r => `<tr><td>${r.sku}</td><td><strong>${r.name}</strong></td><td class="num">${r.qty}</td><td class="num">${money(r.total)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty-state">No sales rung up today yet — use Checkout to record a sale.</td></tr>`}
       </tbody></table></div>
     </div>
-    <div class="sec"></div>
-    <div class="card"><h2>Category performance</h2><div class="tw"><table><thead><tr><th>Category</th><th>Revenue</th><th>Profit</th><th>Margin</th></tr></thead><tbody>
-    ${CATS.map(c => { const rows = sales.filter(s => s.cat === c); const rev = rows.reduce((a, r) => a + r.total, 0); const pr = rows.reduce((a, r) => a + r.profit, 0); return `<tr><td>${c}</td><td class="num">${money(rev)}</td><td class="num">${money(pr)}</td><td class="num">${rev ? ((pr / rev) * 100).toFixed(1) : '0.0'}%</td></tr>`; }).join('')}
+    <div class="card"><div class="section-head"><div><h2>Category performance</h2><span class="section-meta">Revenue and margin by category</span></div></div><div class="tw"><table><thead><tr><th>Category</th><th>Revenue</th><th>Profit</th><th>Margin</th></tr></thead><tbody>
+    ${CATS.map(c => { const rows = sales.filter(s => s.cat === c); const rev = rows.reduce((a, r) => a + r.total, 0); const pr = rows.reduce((a, r) => a + r.profit, 0); return `<tr><td><strong>${c}</strong></td><td class="num">${money(rev)}</td><td class="num">${money(pr)}</td><td class="num">${rev ? ((pr / rev) * 100).toFixed(1) : '0.0'}%</td></tr>`; }).join('')}
     </tbody></table></div></div>`;
   }
 };
 
+async function saveProductRow(productId) {
+  const categoryId = Number(document.getElementById(`product-category-${productId}`)?.value);
+  const costPrice = Number(document.getElementById(`product-cost-${productId}`)?.value);
+  const sellingPrice = Number(document.getElementById(`product-price-${productId}`)?.value);
+  const reorderPoint = Number(document.getElementById(`product-reorder-${productId}`)?.value);
+  const product = products.find(p => p.productId === productId);
+  if (!product) return;
+  try {
+    await api(`/products/${productId}`, {
+      method: 'PUT',
+      body: JSON.stringify({ categoryId, costPrice, sellingPrice, reorderPoint })
+    });
+    await loadData();
+    render('products');
+  } catch (err) {
+    alert(`Could not save product: ${err.message}`);
+  }
+}
+
+async function addProduct() {
+  const sku = prompt('SKU (example: SKU2000)');
+  if (sku === null) return;
+  const productName = prompt('Product name');
+  if (productName === null) return;
+  if (!CATS.length) return alert('No active product categories are available.');
+  const categoryName = prompt(`Category (${CATS.join(', ')})`, CATS[0]);
+  if (categoryName === null) return;
+  const normalizedCategory = CATS.find(c => c.toLowerCase() === categoryName.trim().toLowerCase());
+  if (!normalizedCategory) return alert('Category not found.');
+  const costPrice = Number(prompt('Cost price', '0'));
+  const sellingPrice = Number(prompt('Selling price', '0'));
+  const reorderPoint = Number(prompt('Reorder point', '12'));
+  const openingStock = Number(prompt('Opening stock', '0'));
+  if ([costPrice, sellingPrice, reorderPoint, openingStock].some(n => !Number.isFinite(n) || n < 0)) {
+    return alert('Please enter valid non-negative numbers.');
+  }
+  try {
+    await api('/products', {
+      method: 'POST',
+      body: JSON.stringify({
+        sku, productName, categoryId: categoryIdByName[normalizedCategory],
+        costPrice, sellingPrice, reorderPoint, openingStock
+      })
+    });
+    await loadData();
+    render('products');
+  } catch (err) {
+    alert(`Could not add product: ${err.message}`);
+  }
+}
+
 function filterInv(q) {
   q = q.toLowerCase();
   document.querySelectorAll('#invTable tbody tr').forEach(tr => {
+    tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
+  });
+}
+function filterProducts(q) {
+  q = q.toLowerCase();
+  document.querySelectorAll('#productTable tbody tr').forEach(tr => {
     tr.style.display = tr.textContent.toLowerCase().includes(q) ? '' : 'none';
   });
 }
@@ -405,12 +633,45 @@ function drawDashboardCharts() {
   charts.push(new Chart(document.getElementById('catChart'), { type: 'bar', data: { labels: CATS, datasets: [{ label: 'Revenue', data: CATS.map(c => +sales.filter(s => s.cat === c).reduce((a, r) => a + r.total, 0).toFixed(2)), backgroundColor: '#3F8F7E' }] }, options: { plugins: { legend: { display: false } }, scales: { x: axis, y: axis } } }));
 }
 
-const tabDefs = [["dashboard", "Dashboard"], ["analytics", "Analytics"], ["inventory", "Inventory"], ["ledger", "Sales Ledger"], ["products", "Products"], ["reports", "Reports"]];
+const navDefs = [
+  ["dashboard", "Checkout", "checkout"],
+  ["history", "Sales", "sales"],
+  ["inventory", "Inventory", "inventory"],
+  ["analytics", "Analytics", "analytics"],
+  ["reports", "Reports", "reports"]
+];
+const navGroup = { dashboard: "checkout", history: "sales", ledger: "sales", inventory: "inventory", alerts: "inventory", products: "inventory", analytics: "analytics", reports: "reports" };
+
+function inventorySubnav(active) {
+  const count = lowStockList().length;
+  return `<div class="subnav"><span class="subnav-label">Inventory</span><button class="${active === 'inventory' ? 'on' : ''}" onclick="render('inventory')">Central stock</button><button class="${active === 'alerts' ? 'on' : ''}" onclick="render('alerts')">Low stock ${count ? `<span class="subnav-badge">${count}</span>` : ''}</button><button class="${active === 'products' ? 'on' : ''}" onclick="render('products')">Products</button></div>`;
+}
+function salesSubnav(active) {
+  return `<div class="subnav"><span class="subnav-label">Sales</span><button class="${active === 'history' ? 'on' : ''}" onclick="render('history')">Transactions</button><button class="${active === 'ledger' ? 'on' : ''}" onclick="render('ledger')">Sales ledger</button></div>`;
+}
 function render(tab) {
-  document.getElementById('nav').innerHTML = tabDefs.map(([id, label]) => `<button class="${id === tab ? 'on' : ''}" onclick="render('${id}')">${label}</button>`).join('');
+  if (!(tab in views)) tab = 'dashboard';
+  const alertCount = lowStockList().length;
+  const activeGroup = navGroup[tab] || 'checkout';
+  document.getElementById('nav').innerHTML = navDefs.map(([id, label, group]) => {
+    const badge = group === 'inventory' && alertCount ? ` <span class="nav-badge">${alertCount}</span>` : '';
+    return `<button class="${group === activeGroup ? 'on' : ''}" onclick="render('${id}')">${label}${badge}</button>`;
+  }).join('');
   destroyCharts();
   document.getElementById('main').innerHTML = views[tab]();
   if (tab === 'analytics') drawDashboardCharts();
   history.replaceState(null, '', '#' + tab);
 }
-render(location.hash.slice(1) in views ? location.hash.slice(1) : 'dashboard');
+async function startApp() {
+  try {
+    await loadData();
+    render(location.hash.slice(1) in views ? location.hash.slice(1) : 'dashboard');
+  } catch (err) {
+    const openedFromFile = location.protocol === 'file:';
+    const help = openedFromFile
+      ? 'Open the POS through XAMPP at http://localhost/POS-System-XAMPP/ instead of double-clicking index.html.'
+      : 'Make sure Apache and MySQL are running in XAMPP, the database was imported, and api/config.php has the correct MySQL settings.';
+    document.getElementById('main').innerHTML = `<div class="card error-card"><h2>Cannot connect to POS database</h2><p>${err.message}</p><p>${help}</p><p>Test the PHP API at <a href="api/index.php?route=health">api/index.php?route=health</a>.</p></div>`;
+  }
+}
+startApp();
