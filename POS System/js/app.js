@@ -9,8 +9,14 @@ let vouchersList = [];
 let VOUCHERS = {};
 let opex = {};
 let totalOpex = 0;
+let currentUser = null;
 const today = new Date();
-const days = [...Array(14)].map((_, i) => { const d = new Date(today); d.setHours(0,0,0,0); d.setDate(d.getDate() - (13 - i)); return d; });
+const DATA_DAYS = 90;
+let analyticsRangeDays = 14;
+function makeDateList(count, end = today) {
+  return [...Array(count)].map((_, i) => { const d = new Date(end); d.setHours(0,0,0,0); d.setDate(d.getDate() - (count - 1 - i)); return d; });
+}
+const days = makeDateList(DATA_DAYS);
 
 function fmtDate(d) { return new Date(d).toISOString().slice(0, 10); }
 const money = n => "₱" + Number(n || 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -48,8 +54,19 @@ async function loadData() {
 }
 
 // All figures below are recomputed from database-backed data on every render.
-function computeStats() {
-  const salesByDay = days.map(d => {
+function periodRows(rangeDays = analyticsRangeDays, end = today) {
+  const endDate = new Date(end); endDate.setHours(0,0,0,0);
+  const startDate = new Date(endDate); startDate.setDate(startDate.getDate() - (rangeDays - 1));
+  const startKey = fmtDate(startDate);
+  const endKey = fmtDate(endDate);
+  return sales.filter(s => s.date >= startKey && s.date <= endKey);
+}
+function computeStats(rangeDays = analyticsRangeDays) {
+  const selectedDays = makeDateList(rangeDays);
+  const currentRows = periodRows(rangeDays, today);
+  const previousEnd = new Date(today); previousEnd.setHours(0,0,0,0); previousEnd.setDate(previousEnd.getDate() - rangeDays);
+  const previousRows = periodRows(rangeDays, previousEnd);
+  const salesByDay = selectedDays.map(d => {
     const rows = sales.filter(s => s.date === fmtDate(d));
     const uniqueTx = new Set(rows.map(r => r.transactionId));
     return {
@@ -59,23 +76,35 @@ function computeStats() {
       tx: uniqueTx.size
     };
   });
-  const totalRev = +sales.reduce((a, r) => a + r.total, 0).toFixed(2);
-  const totalProfit = +sales.reduce((a, r) => a + r.profit, 0).toFixed(2);
+  const totalRev = +currentRows.reduce((a, r) => a + r.total, 0).toFixed(2);
+  const totalProfit = +currentRows.reduce((a, r) => a + r.profit, 0).toFixed(2);
+  const previousRev = +previousRows.reduce((a, r) => a + r.total, 0).toFixed(2);
   const totalCOGS = +(totalRev - totalProfit).toFixed(2);
   const todayRows = sales.filter(s => s.date === fmtDate(today));
   const todayTxCount = new Set(todayRows.map(r => r.transactionId)).size;
   const netProfit = +(totalProfit - totalOpex).toFixed(2);
   const byProduct = {};
-  sales.forEach(s => {
-    byProduct[s.sku] = byProduct[s.sku] || { name: s.name, qty: 0, rev: 0, profit: 0 };
-    byProduct[s.sku].qty += s.qty;
-    byProduct[s.sku].rev += s.total;
-    byProduct[s.sku].profit += s.profit;
+  currentRows.forEach(s => {
+    const key = s.productId ?? s.name;
+    byProduct[key] = byProduct[key] || { name: s.name, qty: 0, rev: 0, profit: 0 };
+    byProduct[key].qty += s.qty;
+    byProduct[key].rev += s.total;
+    byProduct[key].profit += s.profit;
   });
   const topProducts = Object.values(byProduct).sort((a, b) => b.rev - a.rev).slice(0, 6);
   const lowStockCount = products.filter(p => p.stock <= p.reorder).length;
-  return { salesByDay, totalRev, totalProfit, totalCOGS, todayRows, todayTxCount, netProfit, byProduct, topProducts, lowStockCount };
+  const periodTxCount = new Set(currentRows.map(r => r.transactionId)).size;
+  const periodUnits = currentRows.reduce((a, r) => a + r.qty, 0);
+  const trend = previousRev ? ((totalRev - previousRev) / previousRev) * 100 : 0;
+  return { salesByDay, totalRev, totalProfit, totalCOGS, todayRows, todayTxCount, netProfit, byProduct, topProducts, lowStockCount, currentRows, periodTxCount, periodUnits, trend, rangeDays };
 }
+function setAnalyticsRange(value, target = 'analytics') {
+  const n = Number(value);
+  if (![7, 14, 30, 60].includes(n)) return;
+  analyticsRangeDays = n;
+  render(target);
+}
+function rangeLabel(daysCount) { return `Last ${daysCount} days`; }
 
 // ---------- Checkout (Dashboard) state ----------
 let cart = [];
@@ -98,7 +127,7 @@ async function restockProduct(id) {
   try {
     await api(`/inventory/${p.productId}/restock`, { method: 'POST', body: JSON.stringify({ quantity }) });
     await loadData();
-    render('alerts');
+    render('inventory');
   } catch (err) {
     alert(err.message);
   }
@@ -106,7 +135,7 @@ async function restockProduct(id) {
 
 function filteredProducts() {
   const q = posQuery.trim().toLowerCase();
-  return products.filter(p => (posCat === "All" || p.cat === posCat) && (p.name.toLowerCase().includes(q) || p.id.toLowerCase().includes(q)));
+  return products.filter(p => (posCat === "All" || p.cat === posCat) && (p.name.toLowerCase().includes(q) || p.cat.toLowerCase().includes(q)));
 }
 function catButtonsHTML() {
   return ["All", ...CATS].map(c => `<button class="postab ${c === posCat ? 'on' : ''}" onclick="setPosCat('${c}')">${c}</button>`).join('');
@@ -120,7 +149,7 @@ function posItemsHTML(list) {
     return `<button class="pos-item" ${disabled ? 'disabled' : ''} onclick="addToCart('${p.id}')">
       ${status !== 'ok' ? `<span class="pi-badge ${status}">${status === 'out' ? 'OUT' : p.stock + ' LEFT'}</span>` : ''}
       <div class="pi-name">${p.name}</div>
-      <div class="pi-cat">${p.cat} · ${p.id}</div>
+      <div class="pi-cat">${p.cat}</div>
       <div class="pi-price">${money(p.price)}</div>
     </button>`;
   }).join('');
@@ -141,7 +170,7 @@ function cartLinesHTML() {
   if (!cart.length) return `<div class="pos-empty">Tap a product to add it to the sale.</div>`;
   return cart.map(l => `
     <div class="pos-line">
-      <div class="pl-name">${l.name}<div class="pl-sub">${money(l.price)} ea · ${l.id}</div></div>
+      <div class="pl-name">${l.name}<div class="pl-sub">${money(l.price)} each</div></div>
       <div class="pos-qty"><button onclick="changeQty('${l.id}',-1)">−</button><span class="num">${l.qty}</span><button onclick="changeQty('${l.id}',1)">+</button></div>
       <button class="pl-remove" onclick="removeLine('${l.id}')">✕</button>
     </div>`).join('');
@@ -358,9 +387,32 @@ function closeReceipt() { document.getElementById('posOverlay').classList.remove
 
 // ---------- Views ----------
 const views = {
-  dashboard() {
+  adminDashboard() {
     const stats = computeStats();
-    const todayRev = stats.todayRows.reduce((a, r) => a + r.total, 0);
+    return `
+    <div class="page-head"><div><div class="eyebrow">ADMIN</div><h1>Dashboard</h1><p>Overview of today’s sales, stock, and store activity.</p></div><span class="period-pill">Today</span></div>
+    <div class="sec grid g4">
+      <div class="card kpi compact"><div class="l">Today's sales</div><div class="v num">${money(stats.todayRows.reduce((a, r) => a + r.total, 0))}</div><div class="d">${stats.todayTxCount} transactions</div></div>
+      <div class="card kpi compact"><div class="l">Items sold today</div><div class="v num">${stats.todayRows.reduce((a, r) => a + r.qty, 0)}</div><div class="d">Across all completed sales</div></div>
+      <div class="card kpi compact"><div class="l">Low-stock products</div><div class="v num ${stats.lowStockCount ? 'down' : 'up'}">${stats.lowStockCount}</div><div class="d">${stats.lowStockCount ? 'Need attention' : 'Stock levels look good'}</div></div>
+      <div class="card kpi compact"><div class="l">Products</div><div class="v num">${products.length}</div><div class="d">Active products</div></div>
+    </div>
+    <div class="sec grid g2">
+      <div class="card"><div class="section-head"><div><h2>Quick access</h2><span class="section-meta">Common admin tasks</span></div></div><div class="quick-actions">
+        <button class="quick-action" onclick="render('inventory')"><strong>Central stock</strong><span>Check current product quantities</span></button>
+        <button class="quick-action" onclick="render('products')"><strong>Products</strong><span>Update product details and prices</span></button>
+        <button class="quick-action" onclick="render('history')"><strong>Transactions</strong><span>Review completed sales and receipts</span></button>
+        <button class="quick-action" onclick="render('reports')"><strong>Reports</strong><span>View financial and daily summaries</span></button>
+      </div></div>
+      <div class="card"><div class="section-head"><div><h2>Recent sales</h2><span class="section-meta">Latest completed transactions</span></div><button class="link-btn" onclick="render('history')">View all</button></div>
+        <div class="dashboard-list">${transactions.slice(0,5).map(t => `<div class="dashboard-list-row"><div><strong>${t.receiptNumber || '#' + t.id}</strong><span>${t.lines.length} ${t.lines.length === 1 ? 'item' : 'items'} · ${payLabel(t.payMethod)}</span></div><strong class="num">${money(t.total)}</strong></div>`).join('') || '<div class="empty-state">No sales yet.</div>'}</div>
+      </div>
+    </div>
+    <div class="card"><div class="section-head"><div><h2>Need attention?</h2><span class="section-meta">Low-stock products are shown here when available.</span></div></div>
+      ${lowStockList().length ? `<div class="low-stock-mini">${lowStockList().slice(0,5).map(p => `<div><strong>${p.name}</strong><span>${p.stock === 0 ? 'Out of stock' : p.stock + ' left'}</span></div>`).join('')}</div>` : '<div class="empty-state">Nothing needs attention right now.</div>'}
+    </div>`;
+  },
+  checkout() {
     const cartCount = cart.reduce((a, l) => a + l.qty, 0);
     return `
     <div class="page-head checkout-head">
@@ -372,17 +424,11 @@ const views = {
       <div class="register-status"><span class="status-dot"></span><span>Register open</span><strong>Front counter</strong></div>
     </div>
 
-    <div class="sec grid g3">
-      <div class="card kpi compact"><div class="l">Today's sales</div><div class="v num" id="kpiTodayRev">${money(todayRev)}</div><div class="d" id="kpiTodayTx">${stats.todayTxCount} transactions</div></div>
-      <div class="card kpi compact"><div class="l">Low stock</div><div class="v num ${stats.lowStockCount ? 'down' : 'up'}" id="kpiLowStock">${stats.lowStockCount}</div><div class="d">${stats.lowStockCount ? 'items need attention' : 'All stock levels healthy'}</div></div>
-      <div class="card kpi compact"><div class="l">Current sale</div><div class="v num" id="cartCount">${cartCount}</div><div class="d">items in cart</div></div>
-    </div>
-
     <div class="sec grid pos-layout">
       <section class="card pos-products">
         <div class="section-head">
-          <div><h2>Products</h2><span class="section-meta">${products.length} SKUs available</span></div>
-          <div class="search-wrap"><span class="search-icon">⌕</span><input aria-label="Search products" placeholder="Search product or SKU" value="${posQuery}" oninput="setPosQuery(this.value)"></div>
+          <div><h2>Products</h2><span class="section-meta">${products.length} products available</span></div>
+          <div class="search-wrap"><span class="search-icon">⌕</span><input aria-label="Search products" placeholder="Search product" value="${posQuery}" oninput="setPosQuery(this.value)"></div>
         </div>
         <div class="pos-cats" id="posCats">${catButtonsHTML()}</div>
         <div class="pos-grid" id="posGrid">${posItemsHTML(filteredProducts())}</div>
@@ -396,7 +442,7 @@ const views = {
         <div class="pos-lines" id="posLines">${cartLinesHTML()}</div>
         <div id="posTotals">${totalsHTML()}</div>
         <div class="pos-voucher">
-          <label for="voucherInput" class="field-label">Discount / voucher</label>
+          <label for="voucherInput" class="field-label">Discount code</label>
           <div class="inline-field">
             <input id="voucherInput" placeholder="Enter code">
             <button class="btn secondary" onclick="applyVoucher()">Apply</button>
@@ -411,27 +457,6 @@ const views = {
         <button class="btn checkout-btn" id="checkoutBtn" onclick="finalizeSale()">Charge ${cart.length ? money(cartTotals().total) : ''}</button>
         <div class="checkout-hint">Complete the sale to update inventory and sales records.</div>
       </section>
-    </div>`;
-  },
-  alerts() {
-    const low = lowStockList();
-    const out = low.filter(p => p.stock === 0);
-    const atRisk = +low.reduce((a, p) => a + p.stock * p.cost, 0).toFixed(2);
-    return `
-    ${inventorySubnav('alerts')}
-    <div class="page-head"><div><div class="eyebrow">INVENTORY</div><h1>Low stock alerts</h1><p>Items at or below their reorder point.</p></div></div>
-    <div class="sec grid g4">
-      <div class="card kpi compact"><div class="l">Out of stock</div><div class="v num ${out.length ? 'down' : 'up'}">${out.length}</div><div class="d">${out.length ? 'need immediate reorder' : 'None'}</div></div>
-      <div class="card kpi compact"><div class="l">Low stock</div><div class="v num">${low.length - out.length}</div><div class="d">at or below reorder point</div></div>
-      <div class="card kpi compact"><div class="l">SKUs flagged</div><div class="v num">${low.length}</div><div class="d">of ${products.length} total</div></div>
-      <div class="card kpi compact"><div class="l">Stock value</div><div class="v num">${money(atRisk)}</div><div class="d">current value of flagged stock</div></div>
-    </div>
-    ${low.length ? `<div class="alert-banner ${out.length ? 'crit' : ''}"><strong>${out.length ? 'Immediate attention:' : 'Attention:'}</strong> ${out.length ? out.length + ' item(s) are out of stock. ' : ''}${low.length} item(s) are at or below the reorder point.</div>` : ''}
-    <div class="card">
-      <div class="section-head table-head"><div><h2>Items needing attention</h2><span class="section-meta">Review and restock as needed.</span></div></div>
-      <div class="tw"><table><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Stock</th><th>Reorder pt.</th><th>Status</th><th></th></tr></thead><tbody>
-      ${low.length ? low.map(p => `<tr><td>${p.id}</td><td><strong>${p.name}</strong></td><td>${p.cat}</td><td class="num">${p.stock}</td><td class="num">${p.reorder}</td><td><span class="tag ${p.stock === 0 ? 'out' : 'low'}">${p.stock === 0 ? 'Out of stock' : 'Low stock'}</span></td><td class="action-cell"><button class="btn secondary" onclick="restockProduct('${p.id}')">Restock</button></td></tr>`).join('') : `<tr><td colspan="7" class="empty-state">All stock levels are healthy — nothing needs restocking right now.</td></tr>`}
-      </tbody></table></div>
     </div>`;
   },
   history() {
@@ -454,73 +479,74 @@ const views = {
     </div>`;
   },
   analytics() {
-    const stats = computeStats();
-    const wk1 = stats.salesByDay.slice(0, 7).reduce((a, d) => a + d.rev, 0);
-    const wk2 = stats.salesByDay.slice(7, 14).reduce((a, d) => a + d.rev, 0);
-    const trend = wk1 ? (((wk2 - wk1) / wk1) * 100).toFixed(1) : "0.0";
+    const stats = computeStats(analyticsRangeDays);
+    const label = rangeLabel(analyticsRangeDays);
+    const trend = Number(stats.trend || 0).toFixed(1);
     return `
-    <div class="page-head"><div><div class="eyebrow">INSIGHTS</div><h1>Analytics</h1><p>Understand sales performance, product demand, and category trends.</p></div><span class="period-pill">Last 14 days</span></div>
+    <div class="page-head"><div><div class="eyebrow">INSIGHTS</div><h1>Analytics</h1><p>Understand sales performance, product demand, and category trends.</p></div><div class="period-control"><label for="analyticsRange">Showing</label><select id="analyticsRange" onchange="setAnalyticsRange(this.value)">${[7,14,30,60].map(n => `<option value="${n}" ${n === analyticsRangeDays ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
     <div class="sec grid g4">
-      <div class="card kpi compact"><div class="l">Revenue</div><div class="v num">${money(stats.totalRev)}</div><div class="d ${trend >= 0 ? 'up' : 'down'}">${trend >= 0 ? '▲' : '▼'} ${Math.abs(trend)}% vs prior week</div></div>
+      <div class="card kpi compact"><div class="l">Revenue</div><div class="v num">${money(stats.totalRev)}</div><div class="d ${trend >= 0 ? 'up' : 'down'}">${trend >= 0 ? '▲' : '▼'} ${Math.abs(trend)}% vs previous period</div></div>
       <div class="card kpi compact"><div class="l">Gross profit</div><div class="v num">${money(stats.totalProfit)}</div><div class="d">${stats.totalRev ? ((stats.totalProfit / stats.totalRev) * 100).toFixed(1) : '0.0'}% margin</div></div>
-      <div class="card kpi compact"><div class="l">Transactions today</div><div class="v num">${stats.todayTxCount}</div><div class="d">${money(stats.todayRows.reduce((a, r) => a + r.total, 0))} sold</div></div>
-      <div class="card kpi compact"><div class="l">Low stock</div><div class="v num ${stats.lowStockCount ? 'down' : 'up'}">${stats.lowStockCount}</div><div class="d">${stats.lowStockCount ? 'need reordering' : 'No alerts'}</div></div>
+      <div class="card kpi compact"><div class="l">Sales</div><div class="v num">${stats.periodTxCount}</div><div class="d">${stats.periodUnits} items sold</div></div>
+      <div class="card kpi compact"><div class="l">Low stock</div><div class="v num ${stats.lowStockCount ? 'down' : 'up'}">${stats.lowStockCount}</div><div class="d">${stats.lowStockCount ? 'need attention' : 'No alerts'}</div></div>
     </div>
     <div class="sec grid g2">
-      <div class="card chart-card"><div class="chart-title"><h2>Revenue &amp; profit</h2><span class="section-meta">14-day trend</span></div><canvas id="trendChart"></canvas></div>
-      <div class="card chart-card"><div class="chart-title"><h2>Top products</h2><span class="section-meta">By revenue</span></div><canvas id="topChart"></canvas></div>
+      <div class="card chart-card"><div class="chart-title"><h2>Revenue &amp; profit</h2><span class="section-meta">${label}</span></div><canvas id="trendChart"></canvas></div>
+      <div class="card chart-card"><div class="chart-title"><h2>Top products</h2><span class="section-meta">By revenue · ${label.toLowerCase()}</span></div><canvas id="topChart"></canvas></div>
     </div>
-    <div class="sec card chart-card"><div class="chart-title"><h2>Sales by category</h2><span class="section-meta">Revenue distribution</span></div><canvas id="catChart" style="max-height:240px"></canvas></div>`;
+    <div class="sec card chart-card"><div class="chart-title"><h2>Sales by category</h2><span class="section-meta">Revenue distribution · ${label.toLowerCase()}</span></div><canvas id="catChart" style="max-height:240px"></canvas></div>`;
   },
   inventory() {
     const rows = products.map(p => {
       const status = p.stock === 0 ? 'out' : p.stock <= p.reorder ? 'low' : 'ok';
-      return `<tr><td>${p.id}</td><td><strong>${p.name}</strong></td><td>${p.cat}</td><td class="num stock-value">${p.stock}</td><td class="num">${money(p.cost)}</td><td class="num"><strong>${money(p.price)}</strong></td><td><span class="tag ${status}">${status === 'ok' ? 'In stock' : status === 'low' ? 'Low stock' : 'Out of stock'}</span></td></tr>`;
+      return `<tr><td><strong>${p.name}</strong></td><td>${p.cat}</td><td class="num stock-value">${p.stock}</td><td class="num"><strong>${money(p.price)}</strong></td><td><span class="tag ${status}">${status === 'ok' ? 'In stock' : status === 'low' ? 'Low stock' : 'Out of stock'}</span></td></tr>`;
     }).join('');
     return `
     ${inventorySubnav('inventory')}
-    <div class="page-head"><div><div class="eyebrow">INVENTORY</div><h1>Central stock</h1><p>One inventory view for products sold in-store and through e-commerce.</p></div></div>
+    <div class="page-head"><div><div class="eyebrow">INVENTORY</div><h1>Central stock</h1><p>One stock view for products sold in-store and through e-commerce.</p></div></div>
     <div class="card">
-      <div class="toolbar table-toolbar"><div><h2>Stock inventory</h2><span class="section-meta">${products.length} SKUs</span></div><div class="search-wrap compact-search"><span class="search-icon">⌕</span><input placeholder="Search product or SKU" aria-label="Search inventory" oninput="filterInv(this.value)"></div></div>
-      <div class="tw"><table id="invTable"><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Stock</th><th>Cost</th><th>Price</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="toolbar table-toolbar"><div><h2>Stock inventory</h2><span class="section-meta">${products.length} products</span></div><div class="search-wrap compact-search"><span class="search-icon">⌕</span><input placeholder="Search product" aria-label="Search inventory" oninput="filterInv(this.value)"></div></div>
+      <div class="tw"><table id="invTable"><thead><tr><th>Product</th><th>Category</th><th>Current stock</th><th>Price</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>
     </div>`;
   },
   ledger() {
-    const rows = [...sales].reverse().slice(0, 40).map(s => `<tr><td>${s.date}</td><td>${s.sku}</td><td><strong>${s.name}</strong></td><td class="num">${s.qty}</td><td class="num">${money(s.price)}</td><td class="num"><strong>${money(s.total)}</strong></td><td class="num up">${money(s.profit)}</td></tr>`).join('');
+    const rows = [...sales].reverse().slice(0, 40).map(s => `<tr><td>${s.date}</td><td><strong>${s.name}</strong></td><td class="num">${s.qty}</td><td class="num">${money(s.price)}</td><td class="num"><strong>${money(s.total)}</strong></td><td class="num up">${money(s.profit)}</td></tr>`).join('');
     return `
     ${salesSubnav('ledger')}
-    <div class="page-head"><div><div class="eyebrow">SALES</div><h1>Daily sales ledger</h1><p>Line-level record of items sold across the store.</p></div></div>
+    <div class="page-head"><div><div class="eyebrow">SALES</div><h1>Daily sales</h1><p>Line-by-line record of products sold.</p></div></div>
     <div class="card">
-      <div class="section-head table-head"><div><h2>Sales entries</h2><span class="section-meta">${sales.length} line entries across 14 days</span></div></div>
-      <div class="tw"><table><thead><tr><th>Date</th><th>SKU</th><th>Item</th><th>Qty</th><th>Price</th><th>Total</th><th>Profit</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="section-head table-head"><div><h2>Sales entries</h2><span class="section-meta">${sales.length} sales entries available</span></div></div>
+      <div class="tw"><table><thead><tr><th>Date</th><th>Product</th><th>Qty</th><th>Price</th><th>Total</th><th>Profit</th></tr></thead><tbody>${rows}</tbody></table></div>
       <div class="table-footnote">Showing the 40 most recent entries. New completed sales from Checkout appear here.</div>
     </div>`;
   },
   products() {
     const rows = products.map(p => {
       const status = p.stock === 0 ? 'out' : p.stock <= p.reorder ? 'low' : 'ok';
-      return `<tr data-product-row="${p.productId}"><td>${p.id}</td><td><strong>${p.name}</strong></td>
+      return `<tr data-product-row="${p.productId}"><td class="num">${p.productId}</td><td><strong>${p.name}</strong></td>
         <td><select id="product-category-${p.productId}">${CATS.map(c => `<option value="${categoryIdByName[c]}" ${c === p.cat ? 'selected' : ''}>${c}</option>`).join('')}</select></td>
-        <td><input id="product-cost-${p.productId}" class="num compact-input" type="number" min="0" step="0.01" value="${p.cost}"></td>
-        <td><input id="product-price-${p.productId}" class="num compact-input" type="number" min="0" step="0.01" value="${p.price}"></td>
-        <td><input id="product-reorder-${p.productId}" class="num compact-input" type="number" min="0" step="1" value="${p.reorder}"></td>
-        <td class="num">${p.stock}</td><td><span class="tag ${status}">${status === 'ok' ? 'Active' : status === 'low' ? 'Low stock' : 'Out of stock'}</span></td>
+        <td><input id="product-cost-${p.productId}" class="num compact-input" type="number" min="0" step="0.01" value="${p.cost}" aria-label="Cost"></td>
+        <td><input id="product-price-${p.productId}" class="num compact-input" type="number" min="0" step="0.01" value="${p.price}" aria-label="Price"></td>
+        <td><input id="product-reorder-${p.productId}" class="num compact-input" type="number" min="0" step="1" value="${p.reorder}" aria-label="Low-stock warning level"></td>
+        <td class="num">${p.stock}</td><td><span class="tag ${status}">${status === 'ok' ? 'In stock' : status === 'low' ? 'Low stock' : 'Out of stock'}</span></td>
         <td class="action-cell"><button class="btn secondary" onclick="saveProductRow(${p.productId})">Save</button></td></tr>`;
     }).join('');
     return `
     ${inventorySubnav('products')}
-    <div class="page-head"><div><div class="eyebrow">INVENTORY</div><h1>Product management</h1><p>Maintain product details. Stock quantities are managed in Central stock.</p></div><button class="btn" onclick="addProduct()">+ Add product</button></div>
+    <div class="page-head"><div><div class="eyebrow">INVENTORY</div><h1>Product management</h1><p>Update product details and the low-stock warning. Current stock is managed in Central stock.</p></div><button class="btn" onclick="addProduct()">+ Add product</button></div>
     <div class="card">
-      <div class="toolbar table-toolbar"><div><h2>Products</h2><span class="section-meta">Edit category, cost, price, and reorder point.</span></div><div class="search-wrap compact-search"><span class="search-icon">⌕</span><input placeholder="Search product or SKU" aria-label="Search products" oninput="filterProducts(this.value)"></div></div>
-      <div class="tw"><table id="productTable"><thead><tr><th>SKU</th><th>Product</th><th>Category</th><th>Cost</th><th>Price</th><th>Reorder</th><th>Stock</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="toolbar table-toolbar"><div><h2>Products</h2><span class="section-meta">Cost is your buying cost; price is what the customer pays.</span></div><div class="search-wrap compact-search"><span class="search-icon">⌕</span><input placeholder="Search product" aria-label="Search products" oninput="filterProducts(this.value)"></div></div>
+      <div class="tw"><table id="productTable"><thead><tr><th>Product ID</th><th>Product</th><th>Category</th><th>Cost</th><th>Price</th><th>Low-stock warning at</th><th>Current stock</th><th>Status</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="table-footnote">The low-stock warning appears when current stock reaches the number set for that product. Zero means out of stock.</div>
     </div>`;
   },
   reports() {
-    const stats = computeStats();
+    const stats = computeStats(analyticsRangeDays);
+    const label = rangeLabel(analyticsRangeDays);
     return `
-    <div class="page-head"><div><div class="eyebrow">REPORTING</div><h1>Reports</h1><p>Financial and operational summaries for the current reporting period.</p></div><span class="period-pill">Trailing 14 days</span></div>
+    <div class="page-head"><div><div class="eyebrow">REPORTING</div><h1>Reports</h1><p>Financial and operational summaries for the current reporting period.</p></div><div class="period-control"><label for="reportsRange">Showing</label><select id="reportsRange" onchange="setAnalyticsRange(this.value, 'reports')">${[7,14,30,60].map(n => `<option value="${n}" ${n === analyticsRangeDays ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
     <div class="grid g2">
-    <div class="card"><div class="section-head"><div><h2>Profit &amp; Loss</h2><span class="section-meta">Trailing 14 days</span></div></div>
+    <div class="card"><div class="section-head"><div><h2>Profit &amp; Loss</h2><span class="section-meta">${label}</span></div></div>
       <div class="plrow"><span>Gross sales revenue</span><span class="num">${money(stats.totalRev)}</span></div>
       <div class="plrow"><span>Cost of goods sold</span><span class="num down">-${money(stats.totalCOGS)}</span></div>
       <div class="plrow total"><span>Gross profit</span><span class="num">${money(stats.totalProfit)}</span></div>
@@ -533,7 +559,7 @@ const views = {
       <div class="plrow"><span>Avg. transaction value</span><span class="num">${money(sales.length ? stats.totalRev / new Set(sales.map(s => s.transactionId)).size : 0)}</span></div>
       <div class="plrow"><span>Units sold</span><span class="num">${sales.reduce((a, s) => a + s.qty, 0)}</span></div>
       <div class="plrow"><span>Inventory value on hand</span><span class="num">${money(products.reduce((a, p) => a + p.stock * p.cost, 0))}</span></div>
-      <div class="plrow"><span>SKUs below reorder point</span><span class="num down">${stats.lowStockCount}</span></div>
+      <div class="plrow"><span>products below low-stock warning level</span><span class="num down">${stats.lowStockCount}</span></div>
     </div></div>
     <div class="sec card"><div class="section-head"><div><h2>Daily sales report</h2><span class="section-meta">Today</span></div></div>
       <div class="mini-stat-grid">
@@ -542,8 +568,8 @@ const views = {
         <div><span>Items sold</span><strong class="num">${stats.todayRows.reduce((a, r) => a + r.qty, 0)}</strong></div>
         <div><span>Profit</span><strong class="num">${money(stats.todayRows.reduce((a, r) => a + r.profit, 0))}</strong></div>
       </div>
-      <div class="tw"><table><thead><tr><th>SKU</th><th>Item</th><th>Qty</th><th>Total</th></tr></thead><tbody>
-      ${stats.todayRows.length ? [...stats.todayRows].reverse().map(r => `<tr><td>${r.sku}</td><td><strong>${r.name}</strong></td><td class="num">${r.qty}</td><td class="num">${money(r.total)}</td></tr>`).join('') : `<tr><td colspan="4" class="empty-state">No sales rung up today yet — use Checkout to record a sale.</td></tr>`}
+      <div class="tw"><table><thead><tr><th>Item</th><th>Qty</th><th>Total</th></tr></thead><tbody>
+      ${stats.todayRows.length ? [...stats.todayRows].reverse().map(r => `<tr><td><strong>${r.name}</strong></td><td class="num">${r.qty}</td><td class="num">${money(r.total)}</td></tr>`).join('') : `<tr><td colspan="3" class="empty-state">No sales rung up today yet — use Checkout to record a sale.</td></tr>`}
       </tbody></table></div>
     </div>
     <div class="card"><div class="section-head"><div><h2>Category performance</h2><span class="section-meta">Revenue and margin by category</span></div></div><div class="tw"><table><thead><tr><th>Category</th><th>Revenue</th><th>Profit</th><th>Margin</th></tr></thead><tbody>
@@ -571,35 +597,58 @@ async function saveProductRow(productId) {
   }
 }
 
-async function addProduct() {
-  const sku = prompt('SKU (example: SKU2000)');
-  if (sku === null) return;
-  const productName = prompt('Product name');
-  if (productName === null) return;
+function addProduct() {
   if (!CATS.length) return alert('No active product categories are available.');
-  const categoryName = prompt(`Category (${CATS.join(', ')})`, CATS[0]);
-  if (categoryName === null) return;
-  const normalizedCategory = CATS.find(c => c.toLowerCase() === categoryName.trim().toLowerCase());
-  if (!normalizedCategory) return alert('Category not found.');
-  const costPrice = Number(prompt('Cost price', '0'));
-  const sellingPrice = Number(prompt('Selling price', '0'));
-  const reorderPoint = Number(prompt('Reorder point', '12'));
-  const openingStock = Number(prompt('Opening stock', '0'));
-  if ([costPrice, sellingPrice, reorderPoint, openingStock].some(n => !Number.isFinite(n) || n < 0)) {
-    return alert('Please enter valid non-negative numbers.');
+  const modal = document.getElementById('addProductModal');
+  const category = document.getElementById('addProductCategory');
+  const error = document.getElementById('addProductError');
+  if (!modal || !category) return;
+  category.innerHTML = CATS.map(c => `<option value="${categoryIdByName[c]}">${c}</option>`).join('');
+  const form = document.getElementById('addProductForm');
+  if (form) form.reset();
+  category.value = String(categoryIdByName[CATS[0]]);
+  if (document.getElementById('addProductWarning')) document.getElementById('addProductWarning').value = 10;
+  if (document.getElementById('addProductStock')) document.getElementById('addProductStock').value = 0;
+  if (error) { error.hidden = true; error.textContent = ''; }
+  const submitBtn = document.getElementById('addProductSubmit');
+  if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Add product'; }
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+  setTimeout(() => document.getElementById('addProductName')?.focus(), 0);
+}
+function closeAddProduct() {
+  const modal = document.getElementById('addProductModal');
+  if (modal) modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+async function submitAddProduct() {
+  const productName = document.getElementById('addProductName')?.value.trim() || '';
+  const categoryId = Number(document.getElementById('addProductCategory')?.value || 0);
+  const costPrice = Number(document.getElementById('addProductCost')?.value);
+  const sellingPrice = Number(document.getElementById('addProductPrice')?.value);
+  const warningLevel = Number(document.getElementById('addProductWarning')?.value);
+  const openingStock = Number(document.getElementById('addProductStock')?.value);
+  const error = document.getElementById('addProductError');
+  const submitBtn = document.getElementById('addProductSubmit');
+  const showError = (msg) => { if (error) { error.textContent = msg; error.hidden = false; } };
+  if (!productName) return showError('Please enter a product name.');
+  if (!categoryId) return showError('Please choose a category.');
+  if ([costPrice, sellingPrice, warningLevel, openingStock].some(n => !Number.isFinite(n) || n < 0)) {
+    return showError('Please enter valid non-negative numbers.');
   }
+  if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Adding…'; }
+  if (error) error.hidden = true;
   try {
     await api('/products', {
       method: 'POST',
-      body: JSON.stringify({
-        sku, productName, categoryId: categoryIdByName[normalizedCategory],
-        costPrice, sellingPrice, reorderPoint, openingStock
-      })
+      body: JSON.stringify({ productName, categoryId, costPrice, sellingPrice, reorderPoint: warningLevel, openingStock })
     });
     await loadData();
+    closeAddProduct();
     render('products');
   } catch (err) {
-    alert(`Could not add product: ${err.message}`);
+    showError(`Could not add product: ${err.message}`);
+    if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = 'Add product'; }
   }
 }
 
@@ -619,8 +668,9 @@ function filterProducts(q) {
 let charts = [];
 function destroyCharts() { charts.forEach(c => c.destroy()); charts = []; }
 function drawDashboardCharts() {
-  const stats = computeStats();
+  const stats = computeStats(analyticsRangeDays);
   const axis = { ticks: { color: getComputedStyle(document.body).getPropertyValue('--sub') }, grid: { color: getComputedStyle(document.body).getPropertyValue('--line') } };
+  const periodSales = stats.currentRows;
   charts.push(new Chart(document.getElementById('trendChart'), {
     type: 'line', data: {
       labels: stats.salesByDay.map(d => d.date), datasets: [
@@ -630,48 +680,156 @@ function drawDashboardCharts() {
     }, options: { plugins: { legend: { labels: { color: axis.ticks.color } } }, scales: { x: axis, y: axis } }
   }));
   charts.push(new Chart(document.getElementById('topChart'), { type: 'bar', data: { labels: stats.topProducts.map(p => p.name.split(' ').slice(0, 2).join(' ')), datasets: [{ label: 'Revenue', data: stats.topProducts.map(p => +p.rev.toFixed(2)), backgroundColor: '#C96A3E' }] }, options: { indexAxis: 'y', plugins: { legend: { display: false } }, scales: { x: axis, y: axis } } }));
-  charts.push(new Chart(document.getElementById('catChart'), { type: 'bar', data: { labels: CATS, datasets: [{ label: 'Revenue', data: CATS.map(c => +sales.filter(s => s.cat === c).reduce((a, r) => a + r.total, 0).toFixed(2)), backgroundColor: '#3F8F7E' }] }, options: { plugins: { legend: { display: false } }, scales: { x: axis, y: axis } } }));
+  charts.push(new Chart(document.getElementById('catChart'), { type: 'bar', data: { labels: CATS, datasets: [{ label: 'Revenue', data: CATS.map(c => +periodSales.filter(s => s.cat === c).reduce((a, r) => a + r.total, 0).toFixed(2)), backgroundColor: '#3F8F7E' }] }, options: { plugins: { legend: { display: false } }, scales: { x: axis, y: axis } } }));
 }
 
-const navDefs = [
-  ["dashboard", "Checkout", "checkout"],
+const navDefsAdmin = [
+  ["dashboard", "Dashboard", "dashboard"],
   ["history", "Sales", "sales"],
   ["inventory", "Inventory", "inventory"],
   ["analytics", "Analytics", "analytics"],
   ["reports", "Reports", "reports"]
 ];
-const navGroup = { dashboard: "checkout", history: "sales", ledger: "sales", inventory: "inventory", alerts: "inventory", products: "inventory", analytics: "analytics", reports: "reports" };
+const navDefsCashier = [
+  ["checkout", "Checkout", "checkout"],
+  ["history", "Sales", "sales"]
+];
+const navGroup = { dashboard: "dashboard", checkout: "checkout", history: "sales", ledger: "sales", inventory: "inventory", products: "inventory", analytics: "analytics", reports: "reports" };
+
+function visibleViewsForRole() {
+  return currentUser?.role_name === 'ADMIN'
+    ? ['dashboard', 'history', 'inventory', 'products', 'ledger', 'analytics', 'reports']
+    : ['checkout', 'history'];
+}
 
 function inventorySubnav(active) {
-  const count = lowStockList().length;
-  return `<div class="subnav"><span class="subnav-label">Inventory</span><button class="${active === 'inventory' ? 'on' : ''}" onclick="render('inventory')">Central stock</button><button class="${active === 'alerts' ? 'on' : ''}" onclick="render('alerts')">Low stock ${count ? `<span class="subnav-badge">${count}</span>` : ''}</button><button class="${active === 'products' ? 'on' : ''}" onclick="render('products')">Products</button></div>`;
+  return `<div class="subnav"><span class="subnav-label">Inventory</span><button class="${active === 'inventory' ? 'on' : ''}" onclick="render('inventory')">Central stock</button><button class="${active === 'products' ? 'on' : ''}" onclick="render('products')">Products</button></div>`;
 }
+
 function salesSubnav(active) {
-  return `<div class="subnav"><span class="subnav-label">Sales</span><button class="${active === 'history' ? 'on' : ''}" onclick="render('history')">Transactions</button><button class="${active === 'ledger' ? 'on' : ''}" onclick="render('ledger')">Sales ledger</button></div>`;
+  const ledger = currentUser?.role_name === 'ADMIN' ? `<button class="${active === 'ledger' ? 'on' : ''}" onclick="render('ledger')">Daily sales</button>` : '';
+  return `<div class="subnav"><span class="subnav-label">Sales</span><button class="${active === 'history' ? 'on' : ''}" onclick="render('history')">Transactions</button>${ledger}</div>`;
 }
-function render(tab) {
-  if (!(tab in views)) tab = 'dashboard';
-  const alertCount = lowStockList().length;
-  const activeGroup = navGroup[tab] || 'checkout';
-  document.getElementById('nav').innerHTML = navDefs.map(([id, label, group]) => {
-    const badge = group === 'inventory' && alertCount ? ` <span class="nav-badge">${alertCount}</span>` : '';
-    return `<button class="${group === activeGroup ? 'on' : ''}" onclick="render('${id}')">${label}${badge}</button>`;
-  }).join('');
+
+function updateUserHeader() {
+  const chip = document.getElementById('userChip');
+  if (!chip || !currentUser) return;
+  chip.innerHTML = `<div class="user-name">${currentUser.full_name}</div><span class="role-pill">${currentUser.role_name === 'ADMIN' ? 'Admin' : 'Cashier'}</span>`;
+  const badge = document.getElementById('stockAlertBadge');
+  const count = lowStockList().length;
+  if (badge) { badge.textContent = count; badge.hidden = count === 0; }
+  const inventoryBtn = document.getElementById('viewInventoryBtn');
+  if (inventoryBtn) inventoryBtn.hidden = currentUser?.role_name !== 'ADMIN';
+}
+
+function showAppShell(show) {
+  const shell = document.getElementById('appShell');
+  const login = document.getElementById('loginScreen');
+  if (shell) shell.hidden = !show;
+  if (login) login.hidden = show;
+}
+
+function loginView(error = '') {
+  return `<div class="login-shell"><div class="login-card">
+    <div class="login-brand">Til<span>·</span>POS</div>
+    <div class="eyebrow">STORE POINT OF SALE</div>
+    <h1>Sign in</h1>
+    <p class="login-copy">Use your account to open the tools available to your role.</p>
+    ${error ? `<div class="login-error">${error}</div>` : ''}
+    <form onsubmit="event.preventDefault(); submitLogin()">
+      <label>Username<input id="loginUsername" autocomplete="username" placeholder="Enter username" required></label>
+      <label>Password<input id="loginPassword" type="password" autocomplete="current-password" placeholder="Enter password" required></label>
+      <button class="btn login-btn" type="submit">Sign in</button>
+    </form>
+    <div class="demo-login"><strong>Demo accounts</strong><span>Admin: <code>admin</code> / <code>admin123</code></span><span>Cashier: <code>cashier</code> / <code>cashier123</code></span></div>
+  </div></div>`;
+}
+
+async function submitLogin() {
+  const username = document.getElementById('loginUsername')?.value.trim() || '';
+  const password = document.getElementById('loginPassword')?.value || '';
+  const btn = document.querySelector('.login-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Signing in…'; }
+  try {
+    const result = await api('/login', { method: 'POST', body: JSON.stringify({ username, password }) });
+    currentUser = result.user;
+    showAppShell(true);
+    await loadData();
+    render(currentUser.role_name === 'ADMIN' ? 'dashboard' : 'checkout');
+    if (lowStockList().length) setTimeout(openLowStockPopup, 250);
+  } catch (err) {
+    document.getElementById('loginScreen').innerHTML = loginView(err.message);
+  } finally {
+    const loginBtn = document.querySelector('.login-btn');
+    if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'Sign in'; }
+  }
+}
+
+async function logout() {
+  try { await api('/logout', { method: 'POST' }); } catch (_) {}
+  currentUser = null;
+  cart = []; voucher = null;
+  closeLowStockPopup();
   destroyCharts();
-  document.getElementById('main').innerHTML = views[tab]();
+  document.body.classList.remove('checkout-mode');
+  showAppShell(false);
+  document.getElementById('loginScreen').innerHTML = loginView();
+}
+
+function openLowStockPopup() {
+  const low = lowStockList();
+  const body = document.getElementById('lowStockModalBody');
+  const modal = document.getElementById('lowStockModal');
+  if (!body || !modal) return;
+  if (!low.length) {
+    body.innerHTML = `<div class="empty-state modal-empty">All product stock levels are okay right now.</div>`;
+  } else {
+    const out = low.filter(p => p.stock === 0);
+    const lowOnly = low.filter(p => p.stock > 0);
+    body.innerHTML = `${out.length ? `<div class="notice-block danger"><strong>${out.length} product${out.length === 1 ? '' : 's'} out of stock</strong><span>These products cannot be sold until stock is added.</span></div>` : ''}${lowOnly.length ? `<div class="notice-block warning"><strong>${lowOnly.length} product${lowOnly.length === 1 ? '' : 's'} running low</strong><span>The warning appears because stock has reached the product's warning level.</span></div>` : ''}<div class="low-stock-list">${low.map(p => `<div class="low-stock-row"><div><strong>${p.name}</strong><span>${p.cat}</span></div><div class="stock-state ${p.stock === 0 ? 'out' : 'low'}">${p.stock === 0 ? 'Out of stock' : `${p.stock} left`}</div></div>`).join('')}</div>`;
+  }
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+}
+function closeLowStockPopup() {
+  const modal = document.getElementById('lowStockModal');
+  if (modal) modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+
+function render(tab) {
+  const allowed = visibleViewsForRole();
+  if (!(tab in views) || !allowed.includes(tab)) tab = currentUser?.role_name === 'ADMIN' ? 'dashboard' : 'checkout';
+  const activeGroup = navGroup[tab] || 'checkout';
+  const defs = currentUser?.role_name === 'ADMIN' ? navDefsAdmin : navDefsCashier;
+  const nav = document.getElementById('nav');
+  if (nav) nav.innerHTML = defs.map(([id, label, group]) => `<button class="${group === activeGroup ? 'on' : ''}" onclick="render('${id}')">${label}</button>`).join('');
+  updateUserHeader();
+  destroyCharts();
+  document.body.classList.toggle('checkout-mode', tab === 'checkout');
+  document.getElementById('main').innerHTML = views[tab === 'dashboard' ? 'adminDashboard' : tab]();
   if (tab === 'analytics') drawDashboardCharts();
   history.replaceState(null, '', '#' + tab);
 }
+
 async function startApp() {
+  document.getElementById('loginScreen').innerHTML = loginView();
   try {
-    await loadData();
-    render(location.hash.slice(1) in views ? location.hash.slice(1) : 'dashboard');
-  } catch (err) {
-    const openedFromFile = location.protocol === 'file:';
-    const help = openedFromFile
-      ? 'Open the POS through XAMPP at http://localhost/POS-System-XAMPP/ instead of double-clicking index.html.'
-      : 'Make sure Apache and MySQL are running in XAMPP, the database was imported, and api/config.php has the correct MySQL settings.';
-    document.getElementById('main').innerHTML = `<div class="card error-card"><h2>Cannot connect to POS database</h2><p>${err.message}</p><p>${help}</p><p>Test the PHP API at <a href="api/index.php?route=health">api/index.php?route=health</a>.</p></div>`;
+    const me = await api('/me');
+    if (me.authenticated) {
+      currentUser = me.user;
+      showAppShell(true);
+      await loadData();
+      const hash = location.hash.slice(1);
+      const defaultTab = currentUser.role_name === 'ADMIN' ? 'dashboard' : 'checkout';
+      render(visibleViewsForRole().includes(hash) ? hash : defaultTab);
+      if (lowStockList().length) setTimeout(openLowStockPopup, 250);
+    } else {
+      showAppShell(false);
+    }
+  } catch (_) {
+    showAppShell(false);
+    document.getElementById('loginScreen').innerHTML = loginView('Could not reach the POS server. Start Apache and MySQL in XAMPP, then refresh this page.');
   }
 }
 startApp();

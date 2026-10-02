@@ -372,9 +372,14 @@ INSERT INTO roles (role_name, description) VALUES
 
 -- Demo account used by the UI/backend until authentication is implemented.
 INSERT INTO users (role_id, username, full_name, email, password_hash)
-SELECT role_id, 'admin', 'Store Administrator', 'admin@tilpos.local', 'DEMO_ONLY_NOT_FOR_LOGIN'
+SELECT role_id, 'admin', 'Store Administrator', 'admin@tilpos.local', '$2y$12$kC3uVgRo4PXQv3wctA.FKOiUfSkSi.aB8CImRahNjP7I4Nr5svddG'
 FROM roles
 WHERE role_name = 'ADMIN';
+
+INSERT INTO users (role_id, username, full_name, email, password_hash)
+SELECT role_id, 'cashier', 'Store Cashier', 'cashier@tilpos.local', '$2y$12$rjJK5VUNNcqE4IrtezXW1.kNJryzjqOzHOhfOPQwZ.EAL0QgNIsSu'
+FROM roles
+WHERE role_name = 'CASHIER';
 
 INSERT INTO categories (category_name) VALUES
 ('Beverages'),

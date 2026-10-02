@@ -1,6 +1,12 @@
 <?php
 declare(strict_types=1);
 
+session_set_cookie_params([
+    'httponly' => true,
+    'samesite' => 'Lax',
+    'secure' => !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off'
+]);
+session_start();
 header('Content-Type: application/json; charset=utf-8');
 
 $config = require __DIR__ . '/config.php';
@@ -13,6 +19,22 @@ function respond(array $data, int $status = 200): never {
 
 function fail(string $message, int $status = 400): never {
     respond(['error' => $message], $status);
+}
+
+function currentUser(): ?array {
+    return isset($_SESSION['pos_user']) && is_array($_SESSION['pos_user']) ? $_SESSION['pos_user'] : null;
+}
+
+function requireAuth(): array {
+    $user = currentUser();
+    if (!$user) fail('Please log in to continue.', 401);
+    return $user;
+}
+
+function requireRole(array $user, string ...$roles): void {
+    if (!in_array($user['role_name'] ?? '', $roles, true)) {
+        fail('You do not have permission to perform this action.', 403);
+    }
 }
 
 function body(): array {
@@ -63,7 +85,7 @@ function receiptNumber(): string {
 
 function asProduct(array $row): array {
     return [
-        'id' => $row['sku'],
+        'id' => (string)(int)$row['product_id'],
         'productId' => (int)$row['product_id'],
         'name' => $row['product_name'],
         'cat' => $row['category_name'],
@@ -102,7 +124,7 @@ function getBootstrap(PDO $pdo): array {
 
     $ledger = query($pdo, "SELECT transaction_id, receipt_number, transaction_date, source_channel, sku,
         product_name, category_name, quantity, unit_price, unit_cost, total, gross_profit, status
-        FROM vw_sales_ledger WHERE transaction_date >= DATE_SUB(CURDATE(), INTERVAL 13 DAY)
+        FROM vw_sales_ledger WHERE transaction_date >= DATE_SUB(CURDATE(), INTERVAL 89 DAY)
         ORDER BY transaction_date DESC, transaction_id DESC");
 
     $transactions = query($pdo, "SELECT st.transaction_id, st.receipt_number, st.source_channel, st.external_order_id,
@@ -203,6 +225,46 @@ try {
         respond(['ok' => true, 'database' => $config['database']]);
     }
 
+    if ($method === 'GET' && $route === 'me') {
+        $user = currentUser();
+        respond($user ? ['authenticated' => true, 'user' => $user] : ['authenticated' => false]);
+    }
+
+    if ($method === 'POST' && $route === 'login') {
+        $input = body();
+        $username = trim((string)($input['username'] ?? ''));
+        $password = (string)($input['password'] ?? '');
+        if ($username === '' || $password === '') fail('Enter your username and password.');
+        $user = one($pdo, "SELECT u.user_id, u.username, u.full_name, u.email, u.password_hash, u.role_id, r.role_name
+            FROM users u JOIN roles r ON r.role_id = u.role_id
+            WHERE u.username = ? AND u.is_active = TRUE LIMIT 1", [$username]);
+        if (!$user || !password_verify($password, $user['password_hash'])) {
+            fail('Incorrect username or password.', 401);
+        }
+        session_regenerate_id(true);
+        $_SESSION['pos_user'] = [
+            'user_id' => (int)$user['user_id'],
+            'username' => $user['username'],
+            'full_name' => $user['full_name'],
+            'email' => $user['email'],
+            'role_id' => (int)$user['role_id'],
+            'role_name' => $user['role_name']
+        ];
+        respond(['ok' => true, 'user' => $_SESSION['pos_user']]);
+    }
+
+    if ($method === 'POST' && $route === 'logout') {
+        $_SESSION = [];
+        if (ini_get('session.use_cookies')) {
+            $params = session_get_cookie_params();
+            setcookie(session_name(), '', time() - 42000, $params['path'], $params['domain'] ?? '', (bool)$params['secure'], (bool)$params['httponly']);
+        }
+        session_destroy();
+        respond(['ok' => true]);
+    }
+
+    $currentUser = requireAuth();
+
     if ($method === 'GET' && $route === 'bootstrap') {
         respond(getBootstrap($pdo));
     }
@@ -219,6 +281,7 @@ try {
     }
 
     if ($method === 'POST' && count($parts) === 3 && $parts[0] === 'inventory' && $parts[2] === 'restock') {
+        requireRole($currentUser, 'ADMIN');
         $productId = filter_var($parts[1], FILTER_VALIDATE_INT);
         $input = body();
         $quantity = filter_var($input['quantity'] ?? null, FILTER_VALIDATE_INT);
@@ -236,12 +299,13 @@ try {
             [$productId, $quantity, $before, $after, (string)$productId, $input['reason'] ?? 'Manual restock from POS']);
         execute($pdo, "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_value)
             VALUES (?, 'RESTOCK_INVENTORY', 'INVENTORY', ?, ?)",
-            [$config['default_user_id'], (string)$productId, json_encode(['quantity_added'=>$quantity, 'quantity_after'=>$after])]);
+            [$currentUser['user_id'], (string)$productId, json_encode(['quantity_added'=>$quantity, 'quantity_after'=>$after])]);
         $pdo->commit();
         respond(['ok'=>true, 'quantityOnHand'=>$after]);
     }
 
     if ($method === 'PUT' && count($parts) === 2 && $parts[0] === 'products') {
+        requireRole($currentUser, 'ADMIN');
         $productId = filter_var($parts[1], FILTER_VALIDATE_INT);
         $input = body();
         if ($productId === false) fail('Invalid product id.');
@@ -256,7 +320,7 @@ try {
             [$categoryId, $costPrice, $sellingPrice, $reorderPoint, $productId]);
         execute($pdo, "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_value)
             VALUES (?, 'UPDATE_PRODUCT', 'PRODUCT', ?, ?)",
-            [$config['default_user_id'], (string)$productId, json_encode(compact('categoryId','costPrice','sellingPrice','reorderPoint'))]);
+            [$currentUser['user_id'], (string)$productId, json_encode(compact('categoryId','costPrice','sellingPrice','reorderPoint'))]);
         $bootstrap = getBootstrap($pdo);
         $updated = null;
         foreach ($bootstrap['products'] as $p) if ($p['productId'] === $productId) { $updated = $p; break; }
@@ -264,31 +328,32 @@ try {
     }
 
     if ($method === 'POST' && $route === 'products') {
+        requireRole($currentUser, 'ADMIN');
         $input = body();
-        $sku = strtoupper(trim((string)($input['sku'] ?? '')));
         $productName = trim((string)($input['productName'] ?? ''));
         $categoryId = filter_var($input['categoryId'] ?? null, FILTER_VALIDATE_INT);
         $costPrice = (float)($input['costPrice'] ?? 0);
         $sellingPrice = (float)($input['sellingPrice'] ?? 0);
-        $reorderPoint = filter_var($input['reorderPoint'] ?? 12, FILTER_VALIDATE_INT);
+        $reorderPoint = filter_var($input['reorderPoint'] ?? 10, FILTER_VALIDATE_INT);
         $openingStock = filter_var($input['openingStock'] ?? 0, FILTER_VALIDATE_INT);
-        if (!$sku || !$productName || $categoryId === false) fail('SKU, product name, and category are required.');
+        if (!$productName || $categoryId === false) fail('Product name and category are required.');
         if ($costPrice < 0 || $sellingPrice < 0 || $reorderPoint === false || $reorderPoint < 0 || $openingStock === false || $openingStock < 0) fail('Values cannot be negative.');
 
         $pdo->beginTransaction();
+        $internalCode = 'P-' . bin2hex(random_bytes(8));
         $stmt = $pdo->prepare('INSERT INTO products (sku, product_name, category_id, cost_price, selling_price, reorder_point) VALUES (?,?,?,?,?,?)');
-        $stmt->execute([$sku, $productName, $categoryId, $costPrice, $sellingPrice, $reorderPoint]);
+        $stmt->execute([$internalCode, $productName, $categoryId, $costPrice, $sellingPrice, $reorderPoint]);
         $productId = lastId($pdo);
         execute($pdo, 'INSERT INTO inventory (product_id, quantity_on_hand, quantity_reserved) VALUES (?, ?, 0)', [$productId, $openingStock]);
         if ($openingStock > 0) {
             execute($pdo, "INSERT INTO inventory_movements
                 (product_id, movement_type, quantity_change, quantity_before, quantity_after, reference_type, reference_id, reason, created_by)
                 VALUES (?, 'RESTOCK', ?, 0, ?, 'OPENING_STOCK', ?, 'Initial stock when product was created', ?)",
-                [$productId, $openingStock, $openingStock, (string)$productId, $config['default_user_id']]);
+                [$productId, $openingStock, $openingStock, (string)$productId, $currentUser['user_id']]);
         }
         execute($pdo, "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_value)
             VALUES (?, 'CREATE_PRODUCT', 'PRODUCT', ?, ?)",
-            [$config['default_user_id'], (string)$productId, json_encode(['sku'=>$sku, 'product_name'=>$productName])]);
+            [$currentUser['user_id'], (string)$productId, json_encode(['product_id'=>$productId, 'product_name'=>$productName])]);
         $pdo->commit();
         respond(['ok'=>true, 'productId'=>$productId], 201);
     }
@@ -354,7 +419,7 @@ try {
                 (receipt_number, source_channel, external_order_id, user_id, customer_name, customer_email,
                  subtotal, discount_amount, tax_amount, total_amount, status, voucher_id, completed_at)
                 VALUES (?, 'PHYSICAL', NULL, ?, ?, ?, ?, ?, ?, ?, 'COMPLETED', ?, NOW())");
-            $stmt->execute([$receipt, $config['default_user_id'], $customerName ?: null, $customerEmail ?: null,
+            $stmt->execute([$receipt, $currentUser['user_id'], $customerName ?: null, $customerEmail ?: null,
                 $subtotal, $discount, $tax, $total, $voucherId]);
             $transactionId = lastId($pdo);
 
@@ -373,7 +438,7 @@ try {
                 execute($pdo, "INSERT INTO inventory_movements
                     (product_id, movement_type, quantity_change, quantity_before, quantity_after, reference_type, reference_id, reason, created_by)
                     VALUES (?, 'SALE', ?, ?, ?, 'SALE', ?, 'POS checkout sale', ?)",
-                    [$line['productId'], -$line['quantity'], $before, $after, (string)$transactionId, $config['default_user_id']]);
+                    [$line['productId'], -$line['quantity'], $before, $after, (string)$transactionId, $currentUser['user_id']]);
             }
 
             $paymentStatus = $methodName === 'ONLINE' ? ($config['allow_demo_online_payment'] ? 'PAID' : 'PENDING') : 'PAID';
@@ -389,7 +454,7 @@ try {
             if ($voucherId) execute($pdo, 'UPDATE vouchers SET used_count=used_count+1 WHERE voucher_id=?', [$voucherId]);
             execute($pdo, "INSERT INTO audit_logs (user_id, action, entity_type, entity_id, new_value)
                 VALUES (?, 'CREATE_TRANSACTION', 'SALE', ?, ?)",
-                [$config['default_user_id'], (string)$transactionId, json_encode(['receipt_number'=>$receipt,'total_amount'=>$total,'payment_method'=>$methodName])]);
+                [$currentUser['user_id'], (string)$transactionId, json_encode(['receipt_number'=>$receipt,'total_amount'=>$total,'payment_method'=>$methodName])]);
 
             $pdo->commit();
 
