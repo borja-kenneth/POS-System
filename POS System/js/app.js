@@ -112,24 +112,56 @@ let voucher = null;
 let payMethod = "cash";
 let posQuery = "";
 let posCat = "All";
+let restockProductId = null;
 function lowStockList() { return products.filter(p => p.stock <= p.reorder).sort((a, b) => a.stock - b.stock); }
-async function restockProduct(id) {
+function restockProduct(id) {
+  if (currentUser?.role_name !== 'ADMIN') return;
   const p = products.find(x => x.id === id);
   if (!p) return;
-  const defaultQty = Math.max(p.reorder, 1);
-  const input = prompt(`How many units of ${p.name} would you like to add?`, String(defaultQty));
-  if (input === null) return;
-  const quantity = Number(input);
+  restockProductId = p.productId;
+  const modal = document.getElementById('restockModal');
+  const name = document.getElementById('restockProductName');
+  const current = document.getElementById('restockCurrentStock');
+  const qty = document.getElementById('restockQuantity');
+  const reason = document.getElementById('restockReason');
+  const error = document.getElementById('restockError');
+  const submit = document.getElementById('restockSubmit');
+  if (!modal) return;
+  if (name) name.textContent = p.name;
+  if (current) current.textContent = String(p.stock);
+  if (qty) { qty.value = '1'; qty.focus(); qty.select(); }
+  if (reason) reason.value = 'Stock replenishment';
+  if (error) { error.hidden = true; error.textContent = ''; }
+  if (submit) { submit.disabled = false; submit.textContent = 'Add stock'; }
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+}
+function closeRestockModal() {
+  const modal = document.getElementById('restockModal');
+  if (modal) modal.hidden = true;
+  restockProductId = null;
+  document.body.classList.remove('modal-open');
+}
+async function submitRestock() {
+  if (currentUser?.role_name !== 'ADMIN' || restockProductId === null) return;
+  const quantity = Number(document.getElementById('restockQuantity')?.value);
+  const reason = document.getElementById('restockReason')?.value.trim() || 'Stock replenishment';
+  const error = document.getElementById('restockError');
+  const submit = document.getElementById('restockSubmit');
   if (!Number.isInteger(quantity) || quantity <= 0) {
-    alert('Please enter a positive whole number.');
+    if (error) { error.hidden = false; error.textContent = 'Enter a positive whole number.'; }
     return;
   }
+  if (submit) { submit.disabled = true; submit.textContent = 'Adding…'; }
   try {
-    await api(`/inventory/${p.productId}/restock`, { method: 'POST', body: JSON.stringify({ quantity }) });
+    await api(`/inventory/${restockProductId}/restock`, { method: 'POST', body: JSON.stringify({ quantity, reason }) });
+    closeRestockModal();
     await loadData();
     render('inventory');
   } catch (err) {
-    alert(err.message);
+    if (error) { error.hidden = false; error.textContent = err.message; }
+  } finally {
+    if (submit && document.getElementById('restockModal')?.hidden === false) { submit.disabled = false; submit.textContent = 'Add stock'; }
   }
 }
 
@@ -499,14 +531,14 @@ const views = {
   inventory() {
     const rows = products.map(p => {
       const status = p.stock === 0 ? 'out' : p.stock <= p.reorder ? 'low' : 'ok';
-      return `<tr><td><strong>${p.name}</strong></td><td>${p.cat}</td><td class="num stock-value">${p.stock}</td><td class="num"><strong>${money(p.price)}</strong></td><td><span class="tag ${status}">${status === 'ok' ? 'In stock' : status === 'low' ? 'Low stock' : 'Out of stock'}</span></td></tr>`;
+      return `<tr><td><strong>${p.name}</strong></td><td>${p.cat}</td><td class="num stock-value">${p.stock}</td><td class="num"><strong>${money(p.price)}</strong></td><td><span class="tag ${status}">${status === 'ok' ? 'In stock' : status === 'low' ? 'Low stock' : 'Out of stock'}</span></td>${currentUser?.role_name === 'ADMIN' ? `<td class="action-cell"><button class="btn secondary" onclick="restockProduct('${p.id}')">Add stock</button></td>` : ''}</tr>`;
     }).join('');
     return `
     ${inventorySubnav('inventory')}
     <div class="page-head"><div><div class="eyebrow">INVENTORY</div><h1>Central stock</h1><p>One stock view for products sold in-store and through e-commerce.</p></div></div>
     <div class="card">
       <div class="toolbar table-toolbar"><div><h2>Stock inventory</h2><span class="section-meta">${products.length} products</span></div><div class="search-wrap compact-search"><span class="search-icon">⌕</span><input placeholder="Search product" aria-label="Search inventory" oninput="filterInv(this.value)"></div></div>
-      <div class="tw"><table id="invTable"><thead><tr><th>Product</th><th>Category</th><th>Current stock</th><th>Price</th><th>Status</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <div class="tw"><table id="invTable"><thead><tr><th>Product</th><th>Category</th><th>Current stock</th><th>Price</th><th>Status</th>${currentUser?.role_name === 'ADMIN' ? '<th></th>' : ''}</tr></thead><tbody>${rows}</tbody></table></div>
     </div>`;
   },
   ledger() {
@@ -765,15 +797,32 @@ async function submitLogin() {
   }
 }
 
-async function logout() {
+function openLogoutConfirm() {
+  const modal = document.getElementById('logoutModal');
+  if (!modal) return;
+  modal.hidden = false;
+  document.body.classList.add('modal-open');
+}
+function closeLogoutConfirm() {
+  const modal = document.getElementById('logoutModal');
+  if (modal) modal.hidden = true;
+  document.body.classList.remove('modal-open');
+}
+async function confirmLogout() {
+  closeLogoutConfirm();
   try { await api('/logout', { method: 'POST' }); } catch (_) {}
   currentUser = null;
   cart = []; voucher = null;
   closeLowStockPopup();
+  closeRestockModal();
   destroyCharts();
   document.body.classList.remove('checkout-mode');
   showAppShell(false);
   document.getElementById('loginScreen').innerHTML = loginView();
+}
+
+async function logout() {
+  openLogoutConfirm();
 }
 
 function openLowStockPopup() {

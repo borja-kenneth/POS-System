@@ -101,7 +101,7 @@ function asProduct(array $row): array {
 }
 
 function getBootstrap(PDO $pdo): array {
-    $products = query($pdo, "SELECT p.product_id, p.sku, p.product_name, p.category_id, c.category_name,
+    $products = query($pdo, "SELECT p.product_id, p.product_name, p.category_id, c.category_name,
         p.cost_price, p.selling_price, p.reorder_point,
         i.quantity_on_hand, i.quantity_reserved,
         (i.quantity_on_hand - i.quantity_reserved) AS available_quantity,
@@ -122,7 +122,7 @@ function getBootstrap(PDO $pdo): array {
         AND (starts_at IS NULL OR starts_at <= NOW())
         AND (expires_at IS NULL OR expires_at >= NOW()) ORDER BY voucher_code");
 
-    $ledger = query($pdo, "SELECT transaction_id, receipt_number, transaction_date, source_channel, sku,
+    $ledger = query($pdo, "SELECT transaction_id, receipt_number, transaction_date, source_channel,
         product_name, category_name, quantity, unit_price, unit_cost, total, gross_profit, status
         FROM vw_sales_ledger WHERE transaction_date >= DATE_SUB(CURDATE(), INTERVAL 89 DAY)
         ORDER BY transaction_date DESC, transaction_id DESC");
@@ -145,7 +145,7 @@ function getBootstrap(PDO $pdo): array {
     $itemRows = [];
     if ($ids) {
         $placeholders = implode(',', array_fill(0, count($ids), '?'));
-        $itemRows = query($pdo, "SELECT si.transaction_id, si.product_id, p.sku, p.product_name,
+        $itemRows = query($pdo, "SELECT si.transaction_id, si.product_id, p.product_name,
             si.quantity, si.unit_price, si.unit_cost, si.discount_amount, si.line_total
             FROM sale_items si JOIN products p ON p.product_id = si.product_id
             WHERE si.transaction_id IN ($placeholders)
@@ -156,7 +156,7 @@ function getBootstrap(PDO $pdo): array {
     foreach ($itemRows as $item) {
         $id = (int)$item['transaction_id'];
         $itemsByTx[$id][] = [
-            'name' => $item['product_name'], 'sku' => $item['sku'], 'qty' => (int)$item['quantity'],
+            'name' => $item['product_name'], 'qty' => (int)$item['quantity'],
             'price' => (float)$item['unit_price'], 'lineTotal' => (float)$item['line_total']
         ];
     }
@@ -200,7 +200,7 @@ function getBootstrap(PDO $pdo): array {
         'sales' => array_map(fn($r) => [
             'date' => date('Y-m-d', strtotime($r['transaction_date'])),
             'transactionId' => (int)$r['transaction_id'], 'receiptNumber' => $r['receipt_number'],
-            'sourceChannel' => $r['source_channel'], 'sku' => $r['sku'], 'name' => $r['product_name'],
+            'sourceChannel' => $r['source_channel'], 'name' => $r['product_name'],
             'cat' => $r['category_name'], 'qty' => (int)$r['quantity'], 'price' => (float)$r['unit_price'],
             'cost' => (float)$r['unit_cost'], 'total' => (float)$r['total'], 'profit' => (float)$r['gross_profit']
         ], $ledger),
@@ -340,9 +340,8 @@ try {
         if ($costPrice < 0 || $sellingPrice < 0 || $reorderPoint === false || $reorderPoint < 0 || $openingStock === false || $openingStock < 0) fail('Values cannot be negative.');
 
         $pdo->beginTransaction();
-        $internalCode = 'P-' . bin2hex(random_bytes(8));
-        $stmt = $pdo->prepare('INSERT INTO products (sku, product_name, category_id, cost_price, selling_price, reorder_point) VALUES (?,?,?,?,?,?)');
-        $stmt->execute([$internalCode, $productName, $categoryId, $costPrice, $sellingPrice, $reorderPoint]);
+        $stmt = $pdo->prepare('INSERT INTO products (product_name, category_id, cost_price, selling_price, reorder_point) VALUES (?,?,?,?,?)');
+        $stmt->execute([$productName, $categoryId, $costPrice, $sellingPrice, $reorderPoint]);
         $productId = lastId($pdo);
         execute($pdo, 'INSERT INTO inventory (product_id, quantity_on_hand, quantity_reserved) VALUES (?, ?, 0)', [$productId, $openingStock]);
         if ($openingStock > 0) {
@@ -389,7 +388,7 @@ try {
                 $productId = filter_var($raw['productId'] ?? null, FILTER_VALIDATE_INT);
                 $quantity = filter_var($raw['quantity'] ?? null, FILTER_VALIDATE_INT);
                 if ($productId === false || $quantity === false || $quantity <= 0) throw new RuntimeException('Invalid cart item.');
-                $p = one($pdo, "SELECT p.product_id, p.sku, p.product_name, p.cost_price, p.selling_price,
+                $p = one($pdo, "SELECT p.product_id, p.product_name, p.cost_price, p.selling_price,
                     i.quantity_on_hand, i.quantity_reserved FROM products p JOIN inventory i ON i.product_id=p.product_id
                     WHERE p.product_id=? AND p.is_active=TRUE FOR UPDATE", [$productId]);
                 if (!$p) throw new RuntimeException("Product $productId was not found.");
@@ -397,7 +396,7 @@ try {
                 if ($quantity > $available) throw new RuntimeException($p['product_name'] . " only has $available available.");
                 $lineSubtotal = round((float)$p['selling_price'] * $quantity, 2);
                 $subtotal += $lineSubtotal;
-                $normalized[] = ['productId'=>$productId, 'sku'=>$p['sku'], 'name'=>$p['product_name'], 'quantity'=>$quantity,
+                $normalized[] = ['productId'=>$productId, 'name'=>$p['product_name'], 'quantity'=>$quantity,
                     'unitPrice'=>(float)$p['selling_price'], 'unitCost'=>(float)$p['cost_price'], 'lineSubtotal'=>$lineSubtotal];
             }
             $subtotal = round($subtotal, 2);
@@ -458,13 +457,13 @@ try {
 
             $pdo->commit();
 
-            $itemRows = query($pdo, "SELECT si.quantity, si.unit_price, si.line_total, p.product_name, p.sku
+            $itemRows = query($pdo, "SELECT si.quantity, si.unit_price, si.line_total, p.product_name
                 FROM sale_items si JOIN products p ON p.product_id=si.product_id WHERE si.transaction_id=? ORDER BY si.sale_item_id", [$transactionId]);
             $tx = ['id'=>$transactionId, 'receiptNumber'=>$receipt, 'time'=>date(DATE_ATOM), 'sourceChannel'=>'PHYSICAL',
                 'subtotal'=>$subtotal, 'discount'=>$discount, 'tax'=>$tax, 'total'=>$total,
                 'payMethod'=>strtolower($methodName), 'paymentStatus'=>$paymentStatus, 'cashGiven'=>$cashReceived,
                 'change'=>$change, 'voucher'=>$voucher['voucher_code'] ?? null,
-                'lines'=>array_map(fn($i)=>['name'=>$i['product_name'],'sku'=>$i['sku'],'qty'=>(int)$i['quantity'],'price'=>(float)$i['unit_price'],'lineTotal'=>(float)$i['line_total']], $itemRows)];
+                'lines'=>array_map(fn($i)=>['name'=>$i['product_name'],'qty'=>(int)$i['quantity'],'price'=>(float)$i['unit_price'],'lineTotal'=>(float)$i['line_total']], $itemRows)];
             respond(['ok'=>true, 'transaction'=>$tx, 'paymentId'=>$paymentId], 201);
         } catch (Throwable $e) {
             if ($pdo->inTransaction()) $pdo->rollBack();

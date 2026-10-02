@@ -20,7 +20,7 @@
           <span id="stockAlertBadge" class="header-badge" hidden>0</span>
         </button>
         <div class="user-chip" id="userChip"></div>
-        <button class="logout-btn" type="button" onclick="logout()">Log out</button>
+        <button class="logout-btn" type="button" onclick="openLogoutConfirm()">Log out</button>
       </div>
     </header>
     <main id="main"></main>
@@ -67,6 +67,48 @@
           <button class="btn" id="addProductSubmit" type="submit">Add product</button>
         </div>
       </form>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="restockModal" hidden>
+    <div class="modal-card restock-modal" role="dialog" aria-modal="true" aria-labelledby="restockTitle">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">CENTRAL STOCK</div>
+          <h2 id="restockTitle">Add stock</h2>
+          <p class="modal-subcopy" id="restockProductName">Product</p>
+        </div>
+        <button class="modal-close" type="button" onclick="closeRestockModal()" aria-label="Close">×</button>
+      </div>
+      <div class="restock-summary">
+        <span>Current stock</span><strong id="restockCurrentStock">0</strong>
+      </div>
+      <form id="restockForm" class="modal-form" onsubmit="event.preventDefault(); submitRestock()">
+        <label>How many would you like to add?<input id="restockQuantity" type="number" min="1" step="1" value="1" required></label>
+        <label>Reason <input id="restockReason" maxlength="255" value="Stock replenishment" placeholder="e.g. New delivery"></label>
+        <div id="restockError" class="form-error" hidden></div>
+        <div class="modal-actions">
+          <button class="btn secondary" type="button" onclick="closeRestockModal()">Cancel</button>
+          <button class="btn" id="restockSubmit" type="submit">Add stock</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="logoutModal" hidden>
+    <div class="modal-card confirm-modal" role="dialog" aria-modal="true" aria-labelledby="logoutTitle">
+      <div class="modal-head">
+        <div>
+          <div class="eyebrow">ACCOUNT</div>
+          <h2 id="logoutTitle">Log out?</h2>
+        </div>
+        <button class="modal-close" type="button" onclick="closeLogoutConfirm()" aria-label="Close">×</button>
+      </div>
+      <p class="confirm-copy">Are you sure you want to log out of Til·POS?</p>
+      <div class="modal-actions">
+        <button class="btn secondary" type="button" onclick="closeLogoutConfirm()">Stay signed in</button>
+        <button class="btn" type="button" onclick="confirmLogout()">Log out</button>
+      </div>
     </div>
   </div>
 

@@ -1190,3 +1190,10 @@ body.checkout-mode .pos-lines { scrollbar-gutter: stable; }
   body.checkout-mode .pos-layout { min-height: 0; }
   body.checkout-mode .pos-products, body.checkout-mode .pos-cart { min-height: 0; }
 }
+
+/* Restock / logout confirmation */
+.modal-subcopy { margin: .18rem 0 0; color: var(--sub); font-size: .78rem; }
+.confirm-copy { margin: .35rem 0 0; color: var(--sub); font-size: .82rem; line-height: 1.5; }
+.restock-modal, .confirm-modal { width: min(500px, 100%); }
+.restock-summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem .85rem; border: 1px solid var(--line); background: var(--soft); border-radius: 9px; margin-bottom: .85rem; font-size: .76rem; }
+.restock-summary strong { font-size: 1rem; }
