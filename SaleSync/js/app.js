@@ -9,6 +9,7 @@ let vouchersList = [];
 let VOUCHERS = {};
 let opex = {};
 let totalOpex = 0;
+let expenseRows = [];
 let currentUser = null;
 const today = new Date();
 const DATA_DAYS = 90;
@@ -51,6 +52,7 @@ async function loadData() {
   }]));
   opex = data.expenses || {};
   totalOpex = Object.values(opex).reduce((a, b) => a + Number(b || 0), 0);
+  expenseRows = (data.expenseRows || []).map(e => ({ category: e.category, amount: Number(e.amount || 0), date: e.date }));
 }
 
 // All figures below are recomputed from database-backed data on every render.
@@ -652,6 +654,286 @@ async function exportInvCsv() {
   URL.revokeObjectURL(url);
 }
 
+// ---------- Analytics helpers (admin) ----------
+const anState = { met: 'both', cmp: true, tps: 'rev' };
+let anCache = null;
+const AN_COLORS = ['#265194', '#6AB3CD', '#D9A63A', '#3FA382', '#7B68C8', '#D0687A'];
+const AN_PAY = { cash: ['Cash', '#6AB3CD'], card: ['Card', '#265194'], online: ['Online', '#D9A63A'] };
+function anColor(cat) { return AN_COLORS[Math.max(CATS.indexOf(cat), 0) % AN_COLORS.length]; }
+function anDateStr(daysAgo) { const d = new Date(); d.setHours(0, 0, 0, 0); d.setDate(d.getDate() - daysAgo); return localISO(d); }
+function anShort(v) { return v >= 1000 ? (v / 1000).toFixed(v >= 10000 ? 0 : 1).replace(/\.0$/, '') + 'k' : String(Math.round(v)); }
+function anHour(h) { return (h % 12 || 12) + (h < 12 ? ' AM' : ' PM'); }
+function anLabel(dateStr) { return new Date(dateStr + 'T00:00:00').toLocaleDateString([], { month: 'short', day: 'numeric' }); }
+function anTrend(cur, prev) {
+  if (!prev) return '';
+  const p = (cur - prev) / prev * 100;
+  return `<span class="a-tr ${p >= 0 ? 'up' : 'down'}">${p >= 0 ? '▲' : '▼'} ${Math.abs(p).toFixed(1)}%</span>`;
+}
+function anData() {
+  const N = analyticsRangeDays;
+  const curDates = [...Array(N)].map((_, i) => anDateStr(N - 1 - i));
+  const prevDates = [...Array(N)].map((_, i) => anDateStr(2 * N - 1 - i));
+  const idx = {}, pidx = {};
+  curDates.forEach((d, i) => { idx[d] = i; }); prevDates.forEach((d, i) => { pidx[d] = i; });
+  const txInfo = {}; transactions.forEach(t => { txInfo[t.id] = t; });
+  const a = { N, curDates, byD: Array(N).fill(0), pf: Array(N).fill(0), byDP: Array(N).fill(0), pp: {}, cat: {}, hr: {}, pay: {}, rev: 0, profit: 0, units: 0, tx: new Set(), prevRev: 0, prevProfit: 0, prevTx: new Set() };
+  sales.forEach(s => {
+    if (s.date in idx) {
+      const i = idx[s.date];
+      a.byD[i] += s.total; a.pf[i] += s.profit; a.rev += s.total; a.profit += s.profit; a.units += s.qty; a.tx.add(s.transactionId);
+      const k = s.productId ?? s.name, o = a.pp[k] = a.pp[k] || { name: s.name, rev: 0, u: 0, pf: 0 };
+      o.rev += s.total; o.u += s.qty; o.pf += s.profit;
+      const c = a.cat[s.cat] = a.cat[s.cat] || { rev: 0, u: 0, pf: 0 };
+      c.rev += s.total; c.u += s.qty; c.pf += s.profit;
+      const t = txInfo[s.transactionId];
+      if (t && t.time instanceof Date) { const h = t.time.getHours(); a.hr[h] = (a.hr[h] || 0) + s.total; const pm = payClass(t.payMethod); a.pay[pm] = (a.pay[pm] || 0) + s.total; }
+    } else if (s.date in pidx) {
+      a.byDP[pidx[s.date]] += s.total; a.prevRev += s.total; a.prevProfit += s.profit; a.prevTx.add(s.transactionId);
+    }
+  });
+  return a;
+}
+function anKpisHTML(a) {
+  const txN = a.tx.size, avg = txN ? a.rev / txN : 0, prevAvg = a.prevTx.size ? a.prevRev / a.prevTx.size : 0;
+  const cards = [['Revenue', money(a.rev), anTrend(a.rev, a.prevRev) + 'vs previous', 't-navy', 'peso'],
+    ['Gross profit', money(a.profit), anTrend(a.profit, a.prevProfit) + (a.rev ? (a.profit / a.rev * 100).toFixed(1) + '% margin' : ''), 't-green', 'trend'],
+    ['Transactions', txN, anTrend(txN, a.prevTx.size) + a.units + ' items sold', 't-sky', 'receipt'],
+    ['Average sale', money(avg), anTrend(avg, prevAvg) + 'per transaction', 't-amber', 'average']];
+  return cards.map((c, i) => `<div class="card d-kpi d-anim" style="--i:${i}"><div><div class="l">${c[0]}</div><div class="v num">${c[1]}</div><div class="d">${c[2]}</div></div><div class="d-kic ${c[3]}">${dIcon(c[4])}</div></div>`).join('');
+}
+function anInsightsHTML(a) {
+  const bi = a.byD.indexOf(Math.max(...a.byD)), tp = Object.values(a.pp).sort((x, y) => y.rev - x.rev)[0];
+  const ph = Object.entries(a.hr).sort((x, y) => y[1] - x[1])[0];
+  const bc = Object.entries(a.cat).map(([k, v]) => [k, v.rev ? v.pf / v.rev : 0]).sort((x, y) => y[1] - x[1])[0];
+  const items = [['Best day', a.rev ? anLabel(a.curDates[bi]) + ' · ' + money(a.byD[bi]) : '—', 'calendar', 't-navy'], ['Top product', tp ? tp.name : '—', 'trophy', 't-amber'],
+    ['Peak hour', ph ? anHour(+ph[0]) + ' – ' + anHour((+ph[0] + 1) % 24) : '—', 'clock', 't-sky'], ['Best margin', bc ? bc[0] + ' · ' + Math.round(bc[1] * 100) + '%' : '—', 'percent', 't-green']];
+  return items.map(x => `<div class="a-in"><div class="a-ib ${x[3]}">${dIcon(x[2])}</div><div><small>${x[0]}</small><b>${x[1]}</b></div></div>`).join('');
+}
+function anChartHTML(a) {
+  const N = a.N, W = 700, H = 270, L = 46, R = 14, T = 14, B = 30, cmp = anState.cmp, met = anState.met;
+  const mx = Math.max(...a.byD, ...(met !== 'rev' ? a.pf : [0]), ...(cmp && met !== 'profit' ? a.byDP : [0]), 1);
+  const pw = Math.pow(10, Math.floor(Math.log10(mx))), top = Math.ceil(mx / pw) * pw;
+  const x = i => L + i * (W - L - R) / Math.max(N - 1, 1), y = v => T + (1 - v / top) * (H - T - B);
+  anCache.geom = { W, H, L, R, T, x, y };
+  const path = arr => 'M' + arr.map((v, i) => x(i) + ',' + y(v)).join(' L');
+  let s = `<defs><linearGradient id="anGrad" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#265194" stop-opacity=".22"/><stop offset="1" stop-color="#265194" stop-opacity="0"/></linearGradient></defs>`;
+  [0, .25, .5, .75, 1].forEach(f => { const v = top * f; s += `<line x1="${L}" x2="${W - R}" y1="${y(v)}" y2="${y(v)}" stroke="#E3EAF0"/><text x="${L - 8}" y="${y(v) + 4}" font-size="11" fill="#7C8A99" text-anchor="end">${anShort(v)}</text>`; });
+  if (cmp && met !== 'profit') s += `<path d="${path(a.byDP)}" fill="none" stroke="#9AA8B6" stroke-width="2" stroke-dasharray="5 5"/>`;
+  if (met !== 'profit') s += `<path d="${path(a.byD)} L${x(N - 1)},${y(0)} L${x(0)},${y(0)}Z" fill="url(#anGrad)"/>`;
+  const sers = []; if (met !== 'profit') sers.push([a.byD, '#265194']); if (met !== 'rev') sers.push([a.pf, '#6AB3CD']);
+  sers.forEach(([arr, c]) => { s += `<path d="${path(arr)}" fill="none" stroke="${c}" stroke-width="3" stroke-linejoin="round" stroke-linecap="round"/>`; if (N <= 14) arr.forEach((v, i) => { s += `<circle cx="${x(i)}" cy="${y(v)}" r="3.5" fill="#fff" stroke="${c}" stroke-width="2"/>`; }); });
+  const step = Math.ceil(N / 7);
+  for (let i = 0; i < N; i += step) s += `<text x="${x(i)}" y="${H - 8}" font-size="11" fill="#7C8A99" text-anchor="middle">${anLabel(a.curDates[i])}</text>`;
+  s += `<line id="anXh" y1="${T}" y2="${H - B}" stroke="#265194" stroke-opacity=".35" style="display:none"/>`;
+  const legend = (met !== 'profit' ? '<span><i style="background:#265194"></i>Revenue</span>' : '') + (met !== 'rev' ? '<span><i style="background:#6AB3CD"></i>Profit</span>' : '') + (cmp && met !== 'profit' ? '<span><i style="background:#9AA8B6"></i>Previous period</span>' : '');
+  return `<div class="a-rel"><svg id="anChart" viewBox="0 0 ${W} ${H}" onmousemove="anHover(event)" onmouseleave="anLeave()">${s}</svg><div id="anTip" class="a-tip"></div></div><div class="a-lg">${legend}</div>`;
+}
+function anHover(e) {
+  const g = anCache?.geom, a = anCache?.a; if (!g || !a) return;
+  const svg = e.currentTarget, r = svg.getBoundingClientRect(), px = (e.clientX - r.left) / r.width * g.W;
+  const i = Math.max(0, Math.min(a.N - 1, Math.round((px - g.L) / (g.W - g.L - g.R) * (a.N - 1))));
+  const xh = document.getElementById('anXh'), tip = document.getElementById('anTip'); if (!xh || !tip) return;
+  xh.setAttribute('x1', g.x(i)); xh.setAttribute('x2', g.x(i)); xh.style.display = 'block';
+  tip.innerHTML = `<b>${anLabel(a.curDates[i])}</b>Revenue ${money(a.byD[i])}<br>Profit ${money(a.pf[i])}${anState.cmp ? `<br>Previous ${money(a.byDP[i])}` : ''}`;
+  tip.style.display = 'block'; tip.style.left = (g.x(i) / g.W * r.width) + 'px'; tip.style.top = (g.y(a.byD[i]) / g.H * r.height) + 'px';
+}
+function anLeave() { const xh = document.getElementById('anXh'), tip = document.getElementById('anTip'); if (xh) xh.style.display = 'none'; if (tip) tip.style.display = 'none'; }
+function anTopHTML(a) {
+  const k = anState.tps, l = Object.values(a.pp).sort((x, y) => y[k] - x[k]).slice(0, 6), m = l[0] ? l[0][k] || 1 : 1;
+  if (!l.length) return '<div class="d-empty"><strong>No sales yet</strong>Top products appear once sales are recorded.</div>';
+  const f = v => k === 'u' ? v + ' units' : money(v);
+  return l.map((p, i) => `<div class="a-rk"><div class="a-n">${i + 1}</div><div class="a-m"><b>${p.name}</b><div class="a-bar"><i style="width:${Math.max(p[k] / m * 100, 3)}%"></i></div></div><div class="a-v">${f(p[k])}<small>${k === 'rev' ? p.u + ' units' : money(p.rev) + ' revenue'}</small></div></div>`).join('');
+}
+function anDonutHTML(a) {
+  const tot = Object.values(a.cat).reduce((s, v) => s + v.rev, 0) || 1, C = 2 * Math.PI * 60, ents = Object.entries(a.cat).sort((x, y) => y[1].rev - x[1].rev);
+  let off = 0, s = '<circle cx="85" cy="85" r="60" fill="none" stroke="#E6EDF3" stroke-width="22"/>';
+  ents.forEach(([k, v]) => { const f = v.rev / tot; s += `<circle cx="85" cy="85" r="60" fill="none" stroke="${anColor(k)}" stroke-width="22" stroke-dasharray="${f * C} ${C}" stroke-dashoffset="${-off * C}" transform="rotate(-90 85 85)"/>`; off += f; });
+  s += `<text x="85" y="82" text-anchor="middle" font-size="11" fill="#7C8A99" font-weight="700">Total</text><text x="85" y="102" text-anchor="middle" font-size="16" font-weight="800" fill="#1E2A38">₱${anShort(a.rev)}</text>`;
+  return `<svg viewBox="0 0 170 170">${s}</svg><div class="a-dl">${ents.map(([k, v]) => `<div><i style="background:${anColor(k)}"></i><span>${k}</span><b>${Math.round(v.rev / tot * 100)}%</b></div>`).join('')}</div>`;
+}
+function anHoursHTML(a) {
+  const W = 560, H = 210, L = 40, B = 26, T = 10, hs = [...Array(15)].map((_, i) => 8 + i), mx = Math.max(...hs.map(h => a.hr[h] || 0), 1);
+  const pk = hs.reduce((b, h) => (a.hr[h] || 0) > (a.hr[b] || 0) ? h : b, 8), bw = (W - L - 6) / hs.length, f = h => (h % 12 || 12) + (h < 12 ? 'a' : 'p');
+  let s = ''; [0, .5, 1].forEach(g => { const yy = T + (1 - g) * (H - T - B); s += `<line x1="${L}" x2="${W - 6}" y1="${yy}" y2="${yy}" stroke="#E3EAF0"/><text x="${L - 6}" y="${yy + 4}" font-size="10" fill="#7C8A99" text-anchor="end">${anShort(mx * g)}</text>`; });
+  hs.forEach((h, i) => { const v = a.hr[h] || 0, bh = v / mx * (H - T - B); s += `<rect x="${L + i * bw + 4}" y="${H - B - bh}" width="${bw - 8}" height="${bh}" rx="5" fill="${h === pk && v ? '#265194' : '#B9D6E6'}"><title>${f(h)}: ${money(v)}</title></rect><text x="${L + i * bw + bw / 2}" y="${H - 8}" font-size="10" fill="#7C8A99" text-anchor="middle">${f(h)}</text>`; });
+  return `<svg viewBox="0 0 ${W} ${H}">${s}</svg>`;
+}
+function anPayHTML(a) {
+  const tot = Object.values(a.pay).reduce((x, y) => x + y, 0), e = Object.entries(a.pay).sort((x, y) => y[1] - x[1]);
+  if (!tot) return '<div class="d-empty"><strong>No payment data</strong>Payment methods appear once sales are recorded.</div>';
+  return `<div class="a-pm">${e.map(([k, v]) => `<i style="width:${v / tot * 100}%;background:${(AN_PAY[k] || ['', '#9AA8B6'])[1]}"></i>`).join('')}</div><div class="a-pl">${e.map(([k, v]) => `<div><i style="background:${(AN_PAY[k] || ['', '#9AA8B6'])[1]}"></i><span>${(AN_PAY[k] || [k])[0]}</span><small>${Math.round(v / tot * 100)}%</small><b class="num">${money(v)}</b></div>`).join('')}</div>`;
+}
+function anTableHTML(a) {
+  const tot = Object.values(a.cat).reduce((s, v) => s + v.rev, 0) || 1, ents = Object.entries(a.cat).sort((x, y) => y[1].rev - x[1].rev);
+  if (!ents.length) return '<div class="d-empty"><strong>No sales yet</strong>Category performance appears once sales are recorded.</div>';
+  return `<table class="s-table"><thead><tr><th>Category</th><th class="r">Units</th><th class="r">Revenue</th><th class="r">Profit</th><th class="r">Margin</th><th>Share</th></tr></thead><tbody>${ents.map(([k, v]) => { const m = v.rev ? v.pf / v.rev * 100 : 0;
+    return `<tr><td><strong>${k}</strong></td><td class="num">${v.u}</td><td class="num">${money(v.rev)}</td><td class="num">${money(v.pf)}</td><td class="num"><span class="i-mg ${m < 30 ? 'w' : 'g'}">${m.toFixed(0)}%</span></td><td><div class="a-sh"><div class="a-t"><i style="width:${v.rev / tot * 100}%;background:${anColor(k)}"></i></div><b>${Math.round(v.rev / tot * 100)}%</b></div></td></tr>`; }).join('')}</tbody></table>`;
+}
+function anSegHTML(items, cur, fn) { return items.map(([v, l]) => `<button class="${String(cur) === String(v) ? 'on' : ''}" onclick="${fn}('${v}')">${l}</button>`).join(''); }
+function setAnMetric(v) { anState.met = v; const set = (id, h) => { const el = document.getElementById(id); if (el) el.innerHTML = h; };
+  set('anMetSeg', anSegHTML([['both', 'Both'], ['rev', 'Revenue'], ['profit', 'Profit']], v, 'setAnMetric')); set('anChartWrap', anChartHTML(anCache.a)); }
+function toggleAnCompare(on) { anState.cmp = on; const el = document.getElementById('anChartWrap'); if (el) el.innerHTML = anChartHTML(anCache.a); }
+function setAnTop(v) { anState.tps = v; const set = (id, h) => { const el = document.getElementById(id); if (el) el.innerHTML = h; };
+  set('anTopSeg', anSegHTML([['rev', 'Revenue'], ['u', 'Units'], ['pf', 'Profit']], v, 'setAnTop')); set('anTop', anTopHTML(anCache.a)); }
+function analyticsPage() {
+  const a = anData(); anCache = { a };
+  const N = a.N;
+  return `
+  <div class="page-head"><div><div class="eyebrow">INSIGHTS</div><h1>Analytics</h1><p>Understand sales performance, product demand, and category trends.</p></div>
+    <div class="s-right"><div class="s-seg">${[7, 14, 30, 60].map(n => `<button class="${n === N ? 'on' : ''}" onclick="setAnalyticsRange(${n})">${n} days</button>`).join('')}</div>
+    <button class="s-btn" onclick="exportAnalyticsCsv()">${dIcon('download')}Export CSV</button></div></div>
+  <div class="sec grid g4">${anKpisHTML(a)}</div>
+  <div class="a-ins">${anInsightsHTML(a)}</div>
+  <div class="a-row"><div class="card d-anim" style="--i:4"><div class="a-hd"><div><h3>Revenue &amp; profit</h3><p>${anLabel(a.curDates[0])} – ${anLabel(a.curDates[N - 1])}</p></div>
+    <div class="a-tools"><label class="a-tg"><input type="checkbox" ${anState.cmp ? 'checked' : ''} onchange="toggleAnCompare(this.checked)">Compare to previous period</label>
+    <div class="s-seg sm" id="anMetSeg">${anSegHTML([['both', 'Both'], ['rev', 'Revenue'], ['profit', 'Profit']], anState.met, 'setAnMetric')}</div></div></div>
+    <div id="anChartWrap">${anChartHTML(a)}</div></div></div>
+  <div class="a-row a-r2"><div class="card d-anim" style="--i:5"><div class="a-hd"><div><h3>Top products</h3><p>Best sellers in this period</p></div><div class="s-seg sm" id="anTopSeg">${anSegHTML([['rev', 'Revenue'], ['u', 'Units'], ['pf', 'Profit']], anState.tps, 'setAnTop')}</div></div><div id="anTop">${anTopHTML(a)}</div></div>
+    <div class="card d-anim" style="--i:6"><div class="a-hd"><div><h3>Sales by category</h3><p>Share of revenue</p></div></div><div class="a-dn">${anDonutHTML(a)}</div></div></div>
+  <div class="a-row a-r2"><div class="card d-anim" style="--i:7"><div class="a-hd"><div><h3>Busiest hours</h3><p>Revenue by hour of day</p></div></div>${anHoursHTML(a)}</div>
+    <div class="card d-anim" style="--i:8"><div class="a-hd"><div><h3>Payment methods</h3><p>How customers pay</p></div></div>${anPayHTML(a)}</div></div>
+  <div class="a-row"><div class="card d-anim" style="--i:9"><div class="a-hd"><div><h3>Category performance</h3><p>Revenue, profit and margin by category</p></div></div><div class="tw">${anTableHTML(a)}</div></div></div>`;
+}
+async function exportAnalyticsCsv() {
+  const a = anData(), esc = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+  const rows = [['Date', 'Revenue', 'Profit', 'Previous period revenue'], ...a.curDates.map((d, i) => [d, a.byD[i].toFixed(2), a.pf[i].toFixed(2), a.byDP[i].toFixed(2)]),
+    [], ['Category', 'Units', 'Revenue', 'Profit', 'Margin %'], ...Object.entries(a.cat).map(([k, v]) => [k, v.u, v.rev.toFixed(2), v.pf.toFixed(2), v.rev ? (v.pf / v.rev * 100).toFixed(1) : '0'])];
+  const text = rows.map(r => r.map(esc).join(',')).join('\r\n');
+  const filename = `salesync-analytics-${a.N}-days-${localISO(new Date())}.csv`;
+  try {
+    const downloads = await claude.use("downloads");
+    if (downloads) { await downloads.save({ filename, data: text }); return; }
+  } catch (e) { /* fall through to blob download */ }
+  const blob = new Blob(['\ufeff' + text], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const el = document.createElement('a'); el.href = url; el.download = filename; el.click();
+  URL.revokeObjectURL(url);
+}
+
+// ---------- Reports page helpers (admin) ----------
+const rpState = { tab: 'pl', cmp: true, day: 0 };
+const RP_EXP_COLORS = ['#7B68C8', '#D9A63A', '#6AB3CD', '#D0687A', '#8A97A6', '#3FA382'];
+const RP_TABS = [['pl', 'Profit & Loss', 'file'], ['daily', 'Daily sales', 'calendar'], ['inv', 'Inventory', 'box'], ['cat', 'Categories', 'percent']];
+function rpBounds(from, to) { return [anDateStr(to - 1), anDateStr(from)]; }
+function rpPL(from, to) {
+  const [lo, hi] = rpBounds(from, to), rows = sales.filter(s => s.date >= lo && s.date <= hi);
+  const R = rows.reduce((a, r) => a + r.total, 0), G = rows.reduce((a, r) => a + r.profit, 0), ex = {};
+  expenseRows.filter(e => e.date >= lo && e.date <= hi).forEach(e => { ex[e.category] = (ex[e.category] || 0) + e.amount; });
+  const E = Object.values(ex).reduce((a, b) => a + b, 0);
+  return { R, C: R - G, G, ex, E, NP: G - E };
+}
+function rpChip(cur, prev, inverse) {
+  if (!prev) return '';
+  const p = (cur - prev) / Math.abs(prev) * 100, good = inverse ? p <= 0 : p >= 0;
+  return `<span class="a-tr ${good ? 'up' : 'down'}">${p >= 0 ? '▲' : '▼'} ${Math.abs(p).toFixed(1)}%</span>`;
+}
+function rpKpisHTML(cards) {
+  return `<div class="sec grid g4">${cards.map((c, i) => `<div class="card d-kpi d-anim" style="--i:${i}"><div><div class="l">${c[0]}</div><div class="v num">${c[1]}</div><div class="d">${c[2] || ''}</div></div><div class="d-kic ${c[3]}">${dIcon(c[4])}</div></div>`).join('')}</div>`;
+}
+function rpPLHTML() {
+  const N = analyticsRangeDays, cur = rpPL(0, N), prv = rpPL(N, 2 * N), cmp = rpState.cmp;
+  const cats = [...new Set([...Object.keys(cur.ex), ...Object.keys(prv.ex)])];
+  const pct = v => cur.R ? (v / cur.R * 100).toFixed(1) : '0.0';
+  const kp = rpKpisHTML([['Revenue', money(cur.R), rpChip(cur.R, prv.R) + 'vs previous', 't-navy', 'peso'], ['Gross profit', money(cur.G), pct(cur.G) + '% gross margin', 't-green', 'trend'],
+    ['Operating expenses', money(cur.E), rpChip(cur.E, prv.E, true) + 'vs previous', 't-amber', 'wallet'], ['Net profit', money(cur.NP), pct(cur.NP) + '% net margin', cur.NP >= 0 ? 't-green' : 't-rose', 'file']]);
+  const row = (label, a, b, o = {}) => {
+    const ch = b ? (a - b) / Math.abs(b) * 100 : null, good = ch === null ? true : (o.inv ? ch <= 0 : ch >= 0);
+    return `<tr class="${o.c || ''}"><td>${label}</td><td class="num ${o.neg ? 'r-neg' : ''}">${o.neg && a ? '-' : ''}${money(Math.abs(a))}</td><td class="num r-pct">${pct(Math.abs(a))}%</td>
+      ${cmp ? `<td class="num">${o.neg && b ? '-' : ''}${money(Math.abs(b))}</td><td class="num">${ch === null ? '—' : `<span class="a-tr ${good ? 'up' : 'down'}">${ch >= 0 ? '▲ ' : '▼ '}${Math.abs(ch).toFixed(1)}%</span>`}</td>` : ''}</tr>`;
+  };
+  const stmt = row('Gross sales revenue', cur.R, prv.R) + row('Cost of goods sold', cur.C, prv.C, { neg: 1, inv: 1, c: 'r-ind' }) + row('Gross profit', cur.G, prv.G, { c: 'r-sub' })
+    + (cats.length ? cats.map(k => row(k, cur.ex[k] || 0, prv.ex[k] || 0, { neg: 1, inv: 1, c: 'r-ind' })).join('') : `<tr class="r-ind"><td colspan="${cmp ? 5 : 3}">No expenses recorded in this period</td></tr>`)
+    + row('Total operating expenses', cur.E, prv.E, { neg: 1, inv: 1, c: 'r-sub' }) + row('Net profit', cur.NP, prv.NP, { c: 'r-tot' });
+  const segs = [['Cost of goods sold', cur.C, '#265194'], ...cats.map((k, i) => [k, cur.ex[k] || 0, RP_EXP_COLORS[i % RP_EXP_COLORS.length]]), ['Net profit', Math.max(cur.NP, 0), '#3FA382']];
+  const flow = cur.R ? `<div class="r-flow">${segs.map(s => `<i style="width:${s[1] / cur.R * 100}%;background:${s[2]}" title="${s[0]}"></i>`).join('')}</div><div class="r-fl">${segs.map(s => `<div><i style="background:${s[2]}"></i><span>${s[0]}</span><small>${pct(s[1])}%</small><b class="num">${money(s[1])}</b></div>`).join('')}</div>`
+    : '<div class="d-empty"><strong>No sales in this period</strong>The breakdown appears once sales are recorded.</div>';
+  return kp + `<div class="r-two"><div class="card"><div class="a-hd"><div><h3>Profit &amp; Loss statement</h3><p>Last ${N} days${cmp ? ' vs the ' + N + ' days before' : ''}</p></div></div>
+    <div class="tw"><table class="s-table r-st"><thead><tr><th></th><th class="r">Amount</th><th class="r">% of revenue</th>${cmp ? '<th class="r">Previous</th><th class="r">Change</th>' : ''}</tr></thead><tbody>${stmt}</tbody></table></div>
+    <div class="r-note">Expenses are counted on the date they were recorded.</div></div>
+    <div class="card"><div class="a-hd"><div><h3>Where the money goes</h3><p>Every ₱100 of revenue</p></div></div>${flow}</div></div>`;
+}
+function rpDayData() {
+  const ds = anDateStr(rpState.day), rows = sales.filter(s => s.date === ds), payOf = {};
+  transactions.forEach(t => { payOf[t.id] = payClass(t.payMethod); });
+  const items = {}, pay = {};
+  rows.forEach(r => { const o = items[r.name] = items[r.name] || { q: 0, t: 0, p: 0 }; o.q += r.qty; o.t += r.total; o.p += r.profit; const m = payOf[r.transactionId]; if (m) pay[m] = (pay[m] || 0) + r.total; });
+  return { ds, rows, items, pay, R: rows.reduce((a, r) => a + r.total, 0), G: rows.reduce((a, r) => a + r.profit, 0), tx: new Set(rows.map(r => r.transactionId)).size, units: rows.reduce((a, r) => a + r.qty, 0) };
+}
+function rpDailyHTML() {
+  const d = rpDayData(), day = rpState.day, label = new Date(d.ds + 'T00:00:00').toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+  const list = Object.entries(d.items).sort((a, b) => b[1].t - a[1].t), pays = Object.entries(d.pay).sort((a, b) => b[1] - a[1]), ptot = pays.reduce((a, [, v]) => a + v, 0);
+  return `<div class="r-dn"><div class="r-nav"><button onclick="setRpDay(${day + 1})" title="Previous day"><span class="r-flip">${dIcon('chevron')}</span></button><b>${day === 0 ? 'Today · ' : ''}${label}</b><button onclick="setRpDay(${day - 1})" ${day === 0 ? 'disabled' : ''} title="Next day">${dIcon('chevron')}</button></div>${day ? '<button class="s-btn" onclick="setRpDay(0)">Back to today</button>' : ''}</div>`
+    + rpKpisHTML([['Revenue', money(d.R), '', 't-navy', 'peso'], ['Transactions', d.tx, '', 't-sky', 'receipt'], ['Items sold', d.units, '', 't-amber', 'bag'], ['Profit', money(d.G), '', 't-green', 'trend']])
+    + `<div class="r-two"><div class="card"><div class="a-hd"><div><h3>Items sold</h3><p>${list.length} ${list.length === 1 ? 'product' : 'products'}</p></div></div>
+      ${list.length ? `<div class="tw"><table class="s-table"><thead><tr><th>Item</th><th class="r">Qty</th><th class="r">Total</th><th class="r">Profit</th></tr></thead><tbody>${list.map(([n, o]) => `<tr><td><strong>${n}</strong></td><td class="num">${o.q}</td><td class="num">${money(o.t)}</td><td class="num"><span class="s-prof">+${money(o.p)}</span></td></tr>`).join('')}</tbody></table></div>` : '<div class="d-empty"><span class="d-bubble">' + dIcon('receipt') + '</span><strong>No sales on this day</strong>Pick another day with the arrows.</div>'}</div>
+      <div class="card"><div class="a-hd"><div><h3>Payment breakdown</h3><p>Cash drawer and other payments</p></div></div>
+      ${ptot ? pays.map(([m, v]) => `<div class="r-pb"><i class="r-dot" style="background:${(AN_PAY[m] || ['', '#9AA8B6'])[1]}"></i><span>${(AN_PAY[m] || [m])[0]}</span><div class="r-t"><i style="width:${v / ptot * 100}%;background:${(AN_PAY[m] || ['', '#9AA8B6'])[1]}"></i></div><b class="num">${money(v)}</b></div>`).join('') : '<div class="d-empty"><strong>No payments</strong>Nothing to show for this day.</div>'}</div></div>`;
+}
+function rpInvHTML() {
+  const g = {}; products.forEach(p => { const o = g[p.cat] = g[p.cat] || { n: 0, u: 0, c: 0, r: 0 }; o.n++; o.u += p.stock; o.c += p.stock * p.cost; o.r += p.stock * p.price; });
+  const tc = products.reduce((a, p) => a + p.stock * p.cost, 0), tr = products.reduce((a, p) => a + p.stock * p.price, 0), need = lowStockList();
+  return rpKpisHTML([['Stock value (cost)', money(tc), 'What you paid', 't-navy', 'box'], ['Stock value (retail)', money(tr), 'If all sold at price', 't-sky', 'peso'],
+    ['Potential profit', money(tr - tc), (tr ? ((tr - tc) / tr * 100).toFixed(1) : '0.0') + '% margin', 't-green', 'trend'], ['Needs restocking', need.length, 'Low or out of stock', 't-amber', 'alert']])
+    + `<div class="r-two"><div class="card"><div class="a-hd"><div><h3>Valuation by category</h3><p>Stock on hand today</p></div></div><div class="tw"><table class="s-table"><thead><tr><th>Category</th><th class="r">Products</th><th class="r">Units</th><th class="r">Value (cost)</th><th class="r">Value (retail)</th></tr></thead><tbody>
+      ${Object.entries(g).map(([c, o]) => `<tr><td><strong>${c}</strong></td><td class="num">${o.n}</td><td class="num">${o.u}</td><td class="num">${money(o.c)}</td><td class="num">${money(o.r)}</td></tr>`).join('')}</tbody></table></div></div>
+      <div class="card"><div class="a-hd"><div><h3>Restock list</h3><p>Lowest stock first</p></div></div>
+      ${need.length ? `<table class="s-table"><tbody>${need.map(p => `<tr><td><strong>${p.name}</strong></td><td class="num">${p.stock} left</td><td><span class="i-st ${p.stock === 0 ? 'out' : 'low'}">${p.stock === 0 ? 'Out' : 'Low'}</span></td></tr>`).join('')}</tbody></table>` : '<div class="d-empty"><strong>All stocked up</strong>Nothing needs restocking.</div>'}</div></div>`;
+}
+function rpCatData() {
+  const N = analyticsRangeDays, [lo, hi] = rpBounds(0, N), [plo, phi] = rpBounds(N, 2 * N), g = {}, pg = {};
+  sales.forEach(s => {
+    if (s.date >= lo && s.date <= hi) { const o = g[s.cat] = g[s.cat] || { u: 0, r: 0, p: 0 }; o.u += s.qty; o.r += s.total; o.p += s.profit; }
+    else if (s.date >= plo && s.date <= phi) pg[s.cat] = (pg[s.cat] || 0) + s.total;
+  });
+  return { g, pg, N };
+}
+function rpCatHTML() {
+  const { g, pg, N } = rpCatData(), ents = Object.entries(g).sort((a, b) => b[1].r - a[1].r), tot = ents.reduce((a, [, o]) => a + o.r, 0) || 1;
+  if (!ents.length) return `<div class="card"><div class="d-empty"><span class="d-bubble">${dIcon('percent')}</span><strong>No sales in this period</strong>Try a longer date range.</div></div>`;
+  return `<div class="card"><div class="a-hd"><div><h3>Category performance</h3><p>Last ${N} days</p></div></div><div class="tw"><table class="s-table"><thead><tr><th>Category</th><th class="r">Units</th><th class="r">Revenue</th><th class="r">vs previous</th><th class="r">Profit</th><th class="r">Margin</th><th>Share</th></tr></thead><tbody>
+    ${ents.map(([c, o]) => { const m = o.r ? o.p / o.r * 100 : 0; return `<tr><td><strong>${c}</strong></td><td class="num">${o.u}</td><td class="num">${money(o.r)}</td><td class="num">${rpChip(o.r, pg[c]) || '—'}</td><td class="num">${money(o.p)}</td><td class="num"><span class="i-mg ${m < 30 ? 'w' : 'g'}">${m.toFixed(0)}%</span></td>
+      <td><div class="a-sh"><div class="a-t"><i style="width:${o.r / tot * 100}%;background:${anColor(c)}"></i></div><b>${Math.round(o.r / tot * 100)}%</b></div></td></tr>`; }).join('')}</tbody></table></div></div>`;
+}
+function rpBodyHTML() { return { pl: rpPLHTML, daily: rpDailyHTML, inv: rpInvHTML, cat: rpCatHTML }[rpState.tab](); }
+function rpControlsHTML() {
+  const usesRange = rpState.tab === 'pl' || rpState.tab === 'cat';
+  return `<div class="s-seg r-tabs">${RP_TABS.map(([v, l, i]) => `<button class="${rpState.tab === v ? 'on' : ''}" onclick="setRpTab('${v}')">${dIcon(i)}${l}</button>`).join('')}</div>
+    ${usesRange ? `<div class="s-seg">${[7, 14, 30, 60].map(n => `<button class="${n === analyticsRangeDays ? 'on' : ''}" onclick="setAnalyticsRange(${n}, 'reports')">${n} days</button>`).join('')}</div>` : ''}
+    ${rpState.tab === 'pl' ? `<label class="a-tg"><input type="checkbox" ${rpState.cmp ? 'checked' : ''} onchange="toggleRpCompare(this.checked)">Compare to previous period</label>` : ''}
+    <span class="r-gen">Generated ${new Date().toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</span>`;
+}
+function rpRefresh() { const c = document.getElementById('rpControls'), b = document.getElementById('rpBody'); if (c) c.innerHTML = rpControlsHTML(); if (b) b.innerHTML = rpBodyHTML(); }
+function setRpTab(v) { rpState.tab = v; rpRefresh(); }
+function toggleRpCompare(on) { rpState.cmp = on; rpRefresh(); }
+function setRpDay(n) { rpState.day = Math.max(0, n); rpRefresh(); }
+function reportsPage() {
+  return `<div class="page-head"><div><div class="eyebrow">REPORTING</div><h1>Reports</h1><p>Financial and operational summaries for your store.</p></div>
+    <div class="s-right"><button class="s-btn" onclick="exportReportCsv()">${dIcon('download')}Export CSV</button><button class="s-btn" onclick="window.print()">${dIcon('print')}Print</button></div></div>
+  <div class="r-bar" id="rpControls">${rpControlsHTML()}</div><div id="rpBody">${rpBodyHTML()}</div>`;
+}
+async function exportReportCsv() {
+  const N = analyticsRangeDays, t = rpState.tab; let name, rows;
+  if (t === 'pl') {
+    const cur = rpPL(0, N), prv = rpPL(N, 2 * N), cats = [...new Set([...Object.keys(cur.ex), ...Object.keys(prv.ex)])];
+    name = `profit-and-loss-${N}-days`; rows = [['Line', 'Amount', 'Previous period'], ['Gross sales revenue', cur.R, prv.R], ['Cost of goods sold', cur.C, prv.C], ['Gross profit', cur.G, prv.G], ...cats.map(k => [k, cur.ex[k] || 0, prv.ex[k] || 0]), ['Total operating expenses', cur.E, prv.E], ['Net profit', cur.NP, prv.NP]].map((r, i) => i ? [r[0], Number(r[1]).toFixed(2), Number(r[2]).toFixed(2)] : r);
+  } else if (t === 'daily') {
+    const d = rpDayData(); name = `daily-sales-${d.ds}`; rows = [['Item', 'Qty', 'Total', 'Profit'], ...Object.entries(d.items).map(([n, o]) => [n, o.q, o.t.toFixed(2), o.p.toFixed(2)])];
+  } else if (t === 'inv') {
+    name = 'inventory-valuation'; rows = [['Product', 'Category', 'Stock', 'Cost', 'Price', 'Value (cost)', 'Value (retail)'], ...products.map(p => [p.name, p.cat, p.stock, p.cost.toFixed(2), p.price.toFixed(2), (p.stock * p.cost).toFixed(2), (p.stock * p.price).toFixed(2)])];
+  } else {
+    const { g } = rpCatData(); name = `category-performance-${N}-days`; rows = [['Category', 'Units', 'Revenue', 'Profit', 'Margin %'], ...Object.entries(g).map(([c, o]) => [c, o.u, o.r.toFixed(2), o.p.toFixed(2), o.r ? (o.p / o.r * 100).toFixed(1) : '0'])];
+  }
+  const esc = v => '"' + String(v ?? '').replace(/"/g, '""') + '"', text = rows.map(r => r.map(esc).join(',')).join('\r\n'), filename = `salesync-${name}-${localISO(new Date())}.csv`;
+  try {
+    const downloads = await claude.use("downloads");
+    if (downloads) { await downloads.save({ filename, data: text }); return; }
+  } catch (e) { /* fall through to blob download */ }
+  const blob = new Blob(['\ufeff' + text], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a'); a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
 // ---------- Dashboard helpers ----------
 function dIcon(name) {
   const u = `url('assets/icons/${name}.svg')`;
@@ -799,22 +1081,7 @@ const views = {
     </div>`;
   },
   analytics() {
-    const stats = computeStats(analyticsRangeDays);
-    const label = rangeLabel(analyticsRangeDays);
-    const trend = Number(stats.trend || 0).toFixed(1);
-    return `
-    <div class="page-head"><div><div class="eyebrow">INSIGHTS</div><h1>Analytics</h1><p>Understand sales performance, product demand, and category trends.</p></div><div class="period-control"><label for="analyticsRange">Showing</label><select id="analyticsRange" onchange="setAnalyticsRange(this.value)">${[7,14,30,60].map(n => `<option value="${n}" ${n === analyticsRangeDays ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
-    <div class="sec grid g4">
-      <div class="card kpi compact"><div class="l">Revenue</div><div class="v num">${money(stats.totalRev)}</div><div class="d ${trend >= 0 ? 'up' : 'down'}">${trend >= 0 ? '▲' : '▼'} ${Math.abs(trend)}% vs previous period</div></div>
-      <div class="card kpi compact"><div class="l">Gross profit</div><div class="v num">${money(stats.totalProfit)}</div><div class="d">${stats.totalRev ? ((stats.totalProfit / stats.totalRev) * 100).toFixed(1) : '0.0'}% margin</div></div>
-      <div class="card kpi compact"><div class="l">Sales</div><div class="v num">${stats.periodTxCount}</div><div class="d">${stats.periodUnits} items sold</div></div>
-      <div class="card kpi compact"><div class="l">Low stock</div><div class="v num ${stats.lowStockCount ? 'down' : 'up'}">${stats.lowStockCount}</div><div class="d">${stats.lowStockCount ? 'need attention' : 'No alerts'}</div></div>
-    </div>
-    <div class="sec grid g2">
-      <div class="card chart-card"><div class="chart-title"><h2>Revenue &amp; profit</h2><span class="section-meta">${label}</span></div><canvas id="trendChart"></canvas></div>
-      <div class="card chart-card"><div class="chart-title"><h2>Top products</h2><span class="section-meta">By revenue · ${label.toLowerCase()}</span></div><canvas id="topChart"></canvas></div>
-    </div>
-    <div class="sec card chart-card"><div class="chart-title"><h2>Sales by category</h2><span class="section-meta">Revenue distribution · ${label.toLowerCase()}</span></div><canvas id="catChart" style="max-height:240px"></canvas></div>`;
+    return analyticsPage();
   },
   inventory() {
     if (currentUser?.role_name === 'ADMIN') return inventoryPage('inventory');
@@ -855,40 +1122,7 @@ const views = {
     </div>`;
   },
   reports() {
-    const stats = computeStats(analyticsRangeDays);
-    const label = rangeLabel(analyticsRangeDays);
-    return `
-    <div class="page-head"><div><div class="eyebrow">REPORTING</div><h1>Reports</h1><p>Financial and operational summaries for the current reporting period.</p></div><div class="period-control"><label for="reportsRange">Showing</label><select id="reportsRange" onchange="setAnalyticsRange(this.value, 'reports')">${[7,14,30,60].map(n => `<option value="${n}" ${n === analyticsRangeDays ? 'selected' : ''}>Last ${n} days</option>`).join('')}</select></div></div>
-    <div class="grid g2">
-    <div class="card"><div class="section-head"><div><h2>Profit &amp; Loss</h2><span class="section-meta">${label}</span></div></div>
-      <div class="plrow"><span>Gross sales revenue</span><span class="num">${money(stats.totalRev)}</span></div>
-      <div class="plrow"><span>Cost of goods sold</span><span class="num down">-${money(stats.totalCOGS)}</span></div>
-      <div class="plrow total"><span>Gross profit</span><span class="num">${money(stats.totalProfit)}</span></div>
-      ${Object.entries(opex).map(([k, v]) => `<div class="plrow"><span>${k}</span><span class="num down">-${money(v)}</span></div>`).join('')}
-      <div class="plrow"><span>Total operating expenses</span><span class="num down">-${money(totalOpex)}</span></div>
-      <div class="plrow total"><span>Net profit</span><span class="num ${stats.netProfit >= 0 ? 'up' : 'down'}">${money(stats.netProfit)}</span></div>
-    </div>
-    <div class="card"><div class="section-head"><div><h2>Report summary</h2><span class="section-meta">Key operating figures</span></div></div>
-      <div class="plrow"><span>Net margin</span><span class="num">${stats.totalRev ? ((stats.netProfit / stats.totalRev) * 100).toFixed(1) : '0.0'}%</span></div>
-      <div class="plrow"><span>Avg. transaction value</span><span class="num">${money(sales.length ? stats.totalRev / new Set(sales.map(s => s.transactionId)).size : 0)}</span></div>
-      <div class="plrow"><span>Units sold</span><span class="num">${sales.reduce((a, s) => a + s.qty, 0)}</span></div>
-      <div class="plrow"><span>Inventory value on hand</span><span class="num">${money(products.reduce((a, p) => a + p.stock * p.cost, 0))}</span></div>
-      <div class="plrow"><span>products below low-stock warning level</span><span class="num down">${stats.lowStockCount}</span></div>
-    </div></div>
-    <div class="sec card"><div class="section-head"><div><h2>Daily sales report</h2><span class="section-meta">Today</span></div></div>
-      <div class="mini-stat-grid">
-        <div><span>Revenue</span><strong class="num">${money(stats.todayRows.reduce((a, r) => a + r.total, 0))}</strong></div>
-        <div><span>Transactions</span><strong class="num">${stats.todayTxCount}</strong></div>
-        <div><span>Items sold</span><strong class="num">${stats.todayRows.reduce((a, r) => a + r.qty, 0)}</strong></div>
-        <div><span>Profit</span><strong class="num">${money(stats.todayRows.reduce((a, r) => a + r.profit, 0))}</strong></div>
-      </div>
-      <div class="tw"><table><thead><tr><th>Item</th><th>Qty</th><th>Total</th></tr></thead><tbody>
-      ${stats.todayRows.length ? [...stats.todayRows].reverse().map(r => `<tr><td><strong>${r.name}</strong></td><td class="num">${r.qty}</td><td class="num">${money(r.total)}</td></tr>`).join('') : `<tr><td colspan="3" class="empty-state">No sales rung up today yet — use Checkout to record a sale.</td></tr>`}
-      </tbody></table></div>
-    </div>
-    <div class="card"><div class="section-head"><div><h2>Category performance</h2><span class="section-meta">Revenue and margin by category</span></div></div><div class="tw"><table><thead><tr><th>Category</th><th>Revenue</th><th>Profit</th><th>Margin</th></tr></thead><tbody>
-    ${CATS.map(c => { const rows = sales.filter(s => s.cat === c); const rev = rows.reduce((a, r) => a + r.total, 0); const pr = rows.reduce((a, r) => a + r.profit, 0); return `<tr><td><strong>${c}</strong></td><td class="num">${money(rev)}</td><td class="num">${money(pr)}</td><td class="num">${rev ? ((pr / rev) * 100).toFixed(1) : '0.0'}%</td></tr>`; }).join('')}
-    </tbody></table></div></div>`;
+    return reportsPage();
   }
 };
 
@@ -1160,7 +1394,6 @@ function render(tab) {
   destroyCharts();
   document.body.classList.toggle('checkout-mode', tab === 'checkout');
   document.getElementById('main').innerHTML = views[tab === 'dashboard' ? 'adminDashboard' : tab]();
-  if (tab === 'analytics') drawDashboardCharts();
   history.replaceState(null, '', '#' + tab);
 }
 

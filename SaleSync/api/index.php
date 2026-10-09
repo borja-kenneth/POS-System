@@ -190,7 +190,7 @@ function getBootstrap(PDO $pdo): array {
 
     $expenseTotals = [];
     foreach ($expenses as $e) {
-        $expenseTotals[$e['expense_category']] = (float)$e['amount'];
+        $expenseTotals[$e['expense_category']] = ($expenseTotals[$e['expense_category']] ?? 0) + (float)$e['amount'];
     }
 
     return [
@@ -205,7 +205,11 @@ function getBootstrap(PDO $pdo): array {
             'cost' => (float)$r['unit_cost'], 'total' => (float)$r['total'], 'profit' => (float)$r['gross_profit']
         ], $ledger),
         'transactions' => $txs,
-        'expenses' => $expenseTotals
+        'expenses' => $expenseTotals,
+        'expenseRows' => array_map(fn($e) => [
+            'category' => $e['expense_category'], 'amount' => (float)$e['amount'],
+            'date' => date('Y-m-d', strtotime($e['expense_date']))
+        ], $expenses)
     ];
 }
 
