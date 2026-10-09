@@ -62,6 +62,82 @@ function normalizeSettings(s = {}) {
 }
 const escapeHtml = value => String(value ?? '').replace(/[&<>\"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[ch]));
 
+// SaleSync's shared modal feedback system for application messages and confirmations.
+let appPopupResolver = null;
+function ensureAppPopup() {
+  let overlay = document.getElementById('appFeedbackModal');
+  if (overlay) return overlay;
+  overlay = document.createElement('div');
+  overlay.id = 'appFeedbackModal';
+  overlay.className = 'modal-overlay app-feedback-overlay';
+  overlay.hidden = true;
+  overlay.innerHTML = `
+    <section class="modal-card app-feedback-card" role="dialog" aria-modal="true" aria-labelledby="appFeedbackTitle" aria-describedby="appFeedbackMessage">
+      <div class="app-feedback-heading">
+        <div class="app-feedback-symbol" id="appFeedbackSymbol" aria-hidden="true">i</div>
+        <div class="app-feedback-heading-text"><div class="eyebrow" id="appFeedbackEyebrow">SALESYNC</div><h2 id="appFeedbackTitle">Notice</h2></div>
+        <button type="button" class="modal-close" id="appFeedbackClose" aria-label="Close">×</button>
+      </div>
+      <p id="appFeedbackMessage" class="app-feedback-message"></p>
+      <div class="modal-actions app-feedback-actions">
+        <button class="btn secondary" type="button" id="appFeedbackCancel" hidden>Cancel</button>
+        <button class="btn" type="button" id="appFeedbackOkay">Okay</button>
+      </div>
+    </section>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener('click', event => { if (event.target === overlay) closeAppPopup(false); });
+  document.getElementById('appFeedbackOkay').addEventListener('click', () => closeAppPopup(true));
+  document.getElementById('appFeedbackCancel').addEventListener('click', () => closeAppPopup(false));
+  document.getElementById('appFeedbackClose').addEventListener('click', () => closeAppPopup(false));
+  document.addEventListener('keydown', event => {
+    const active = document.getElementById('appFeedbackModal');
+    if (event.key === 'Escape' && active && !active.hidden) closeAppPopup(false);
+  });
+  return overlay;
+}
+function setAppPopupContent(message, options = {}) {
+  const tone = ['success', 'warning', 'error', 'info', 'danger'].includes(options.type) ? options.type : 'info';
+  document.getElementById('appFeedbackTitle').textContent = options.title || ({success:'Completed', warning:'Please check', error:'Something went wrong', danger:'Please confirm', info:'SaleSync notice'}[tone]);
+  document.getElementById('appFeedbackEyebrow').textContent = options.eyebrow || 'SALESYNC';
+  document.getElementById('appFeedbackMessage').textContent = String(message ?? '');
+  document.getElementById('appFeedbackSymbol').textContent = ({success:'✓', warning:'!', error:'×', danger:'!', info:'i'}[tone]);
+  const card = document.querySelector('#appFeedbackModal .app-feedback-card');
+  if (card) card.dataset.tone = tone;
+  const okay = document.getElementById('appFeedbackOkay');
+  okay.textContent = options.okText || 'Okay';
+  const cancel = document.getElementById('appFeedbackCancel');
+  cancel.textContent = options.cancelText || 'Cancel';
+  cancel.hidden = !options.confirm;
+  okay.classList.toggle('danger', !!options.danger);
+}
+function closeAppPopup(result = false) {
+  const overlay = document.getElementById('appFeedbackModal');
+  if (overlay) overlay.hidden = true;
+  const resolver = appPopupResolver;
+  appPopupResolver = null;
+  const otherModalOpen = [...document.querySelectorAll('.modal-overlay')].some(el => el.id !== 'appFeedbackModal' && !el.hidden);
+  const receiptOpen = document.getElementById('posOverlay')?.classList.contains('show');
+  if (!otherModalOpen && !receiptOpen) document.body.classList.remove('modal-open');
+  if (resolver) resolver(!!result);
+}
+function showPopup(message, options = {}) {
+  const overlay = ensureAppPopup();
+  if (appPopupResolver) closeAppPopup(false);
+  setAppPopupContent(message, options);
+  overlay.hidden = false;
+  document.body.classList.add('modal-open');
+  document.getElementById('appFeedbackOkay')?.focus({ preventScroll: true });
+}
+function showConfirmPopup(message, options = {}) {
+  const overlay = ensureAppPopup();
+  if (appPopupResolver) closeAppPopup(false);
+  setAppPopupContent(message, { ...options, confirm: true, type: options.type || 'danger', title: options.title || 'Are you sure?', okText: options.okText || 'Confirm', cancelText: options.cancelText || 'Cancel' });
+  overlay.hidden = false;
+  document.body.classList.add('modal-open');
+  document.getElementById('appFeedbackCancel')?.focus({ preventScroll: true });
+  return new Promise(resolve => { appPopupResolver = resolve; });
+}
+
 async function api(path, options = {}) {
   const cleanPath = String(path).replace(/^\/+/, '');
   const response = await fetch(`${API_BASE}?route=${encodeURIComponent(cleanPath)}`, {
@@ -670,16 +746,16 @@ function lookupAndAddProduct(value, fromScanner = false, barcodeOnly = false) {
   const matchingProducts = (!fromScanner && !barcodeOnly) ? filteredProducts() : [];
   const product = exactProduct || (matchingProducts.length === 1 ? matchingProducts[0] : null);
   if (!product) {
-    if (!fromScanner) alert(`No product matches barcode or Product ID \"${code}\". You can still use the product search below.`);
+    if (!fromScanner) showPopup(`No product matches barcode or Product ID "${code}". You can still use the product search below.`, { title: 'Product not found', type: 'warning' });
     return false;
   }
   if (product.stock <= 0) {
-    if (!fromScanner) alert(`${product.name} is out of stock.`);
+    if (!fromScanner) showPopup(`${product.name} is out of stock.`, { title: 'Out of stock', type: 'warning' });
     return false;
   }
   const line = cart.find(item => item.id === product.id);
   if (line && line.qty >= product.stock) {
-    if (!fromScanner) alert(`Only ${product.stock} unit(s) of ${product.name} are available.`);
+    if (!fromScanner) showPopup(`Only ${product.stock} unit(s) of ${product.name} are available.`, { title: 'Insufficient stock', type: 'warning' });
     return false;
   }
   addToCart(product.id);
@@ -881,7 +957,7 @@ async function openBarcodePrint(productId) {
     modal.hidden = false; document.body.classList.add('modal-open');
   } catch (err) {
     if (error) { error.hidden = false; error.textContent = err.message; }
-    else alert(err.message);
+    else showPopup(err.message, { title: 'Barcode label error', type: 'error' });
     modal.hidden = false; document.body.classList.add('modal-open');
   }
 }
@@ -916,11 +992,11 @@ async function downloadBarcodePng() {
       const canvas = document.createElement('canvas'); canvas.width = image.width * 3; canvas.height = image.height * 3;
       const ctx = canvas.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, canvas.width, canvas.height); ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
       URL.revokeObjectURL(url);
-      canvas.toBlob(png => { if (!png) return alert('Could not create the PNG image.'); const a=document.createElement('a'); a.href=URL.createObjectURL(png); a.download=`salesync-${barcodePrintType === 'QR' ? 'qr' : 'barcode'}-${barcodePrintProduct.productId}.png`; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }, 'image/png');
+      canvas.toBlob(png => { if (!png) return showPopup('Could not create the PNG image.', { title: 'Download failed', type: 'error' }); const a=document.createElement('a'); a.href=URL.createObjectURL(png); a.download=`salesync-${barcodePrintType === 'QR' ? 'qr' : 'barcode'}-${barcodePrintProduct.productId}.png`; a.click(); setTimeout(()=>URL.revokeObjectURL(a.href),1000); }, 'image/png');
     };
-    image.onerror = () => { URL.revokeObjectURL(url); alert('Could not generate this label image. Try the other label type or check the product code.'); };
+    image.onerror = () => { URL.revokeObjectURL(url); showPopup('Could not generate this label image. Try the other label type or check the product code.', { title: 'Label generation failed', type: 'error' }); };
     image.src = url;
-  } catch (err) { alert(err.message); }
+  } catch (err) { showPopup(err.message, { title: 'Label download failed', type: 'error' }); }
 }
 function printBarcodeLabels() {
   if (!barcodePrintProduct) return;
@@ -1058,10 +1134,10 @@ function applyVoucher() {
     voucher = code;
   } else if (v) {
     voucher = null;
-    alert(`${code} requires a minimum purchase of ${money(v.minimumPurchase)}.`);
+    showPopup(`${code} requires a minimum purchase of ${money(v.minimumPurchase)}.`, { title: 'Minimum purchase not met', type: 'warning' });
   } else {
     voucher = null;
-    alert('Invalid or inactive voucher code.');
+    showPopup('Invalid or inactive voucher code.', { title: 'Voucher not accepted', type: 'warning' });
   }
   refreshCartPanel();
 }
@@ -1085,7 +1161,7 @@ async function finalizeSale() {
   const { total } = cartTotals();
   const cashGiven = parseFloat(document.getElementById('cashGiven')?.value) || 0;
   if (payMethod === 'cash' && cashGiven < total) {
-    alert(`Cash received must be at least ${money(total)}.`);
+    showPopup(`Cash received must be at least ${money(total)}.`, { title: 'Insufficient cash', type: 'warning' });
     return;
   }
 
@@ -1118,7 +1194,7 @@ async function finalizeSale() {
     if (grid) grid.innerHTML = posItemsHTML(filteredProducts());
     refreshDashboardKPIs();
   } catch (err) {
-    alert(`Could not complete the sale: ${err.message}`);
+    showPopup(`Could not complete the sale: ${err.message}`, { title: 'Sale could not be completed', type: 'error' });
     checkoutBtnState();
   }
 }
@@ -1178,7 +1254,7 @@ async function sendEmailReceipt(id) {
     msg.textContent = result.message || `Digital receipt request recorded for ${val}.`;
     msg.classList.add('show');
   } catch (err) {
-    alert(err.message);
+    showPopup(err.message, { title: 'Request failed', type: 'error' });
   }
 }
 async function downloadReceipt(id) {
@@ -1725,7 +1801,7 @@ async function deleteExpenseRecord(id) {
   if (currentUser?.role_name !== 'ADMIN') return;
   const expense = expenseRows.find(e => Number(e.id) === Number(id));
   if (!expense) return;
-  const confirmed = window.confirm(`Delete this expense record?\n\n${expense.date} · ${expense.category} · ${money(expense.amount)}\n\nThe Profit & Loss statement for this period will change. This cannot be undone from SaleSync.`);
+  const confirmed = await showConfirmPopup(`Delete this expense record?\n\n${expense.date} · ${expense.category} · ${money(expense.amount)}\n\nThe Profit & Loss statement for this period will change. This cannot be undone from SaleSync.`, { title: 'Delete expense record?', okText: 'Delete expense', cancelText: 'Keep record', danger: true });
   if (!confirmed) return;
   try {
     await api(`/expenses/${Number(id)}`, { method: 'DELETE' });
@@ -2163,12 +2239,12 @@ async function saveProductRow(productId) {
     render('products');
     setTimeout(() => { invState.savedId = null; document.getElementById('inv-ok-' + productId)?.remove(); }, 2200);
   } catch (err) {
-    alert(`Could not save product: ${err.message}`);
+    showPopup(`Could not save product: ${err.message}`, { title: 'Could not save product', type: 'error' });
   }
 }
 
 function addProduct() {
-  if (!CATS.length) return alert('No active product categories are available.');
+  if (!CATS.length) return showPopup('No active product categories are available.', { title: 'No categories available', type: 'warning' });
   const modal = document.getElementById('addProductModal');
   const category = document.getElementById('addProductCategory');
   const error = document.getElementById('addProductError');
@@ -2278,7 +2354,7 @@ async function toggleCategory(id, active) {
     render('products');
     const modal = document.getElementById('categoryManagerModal'); if (modal) modal.hidden = false;
     document.body.classList.add('modal-open');
-  } catch (err) { alert(err.message); }
+  } catch (err) { showPopup(err.message, { title: 'Category update failed', type: 'error' }); }
 }
 
 // ---------- Return / refund workflow (cashier and admin) ----------
@@ -2367,8 +2443,8 @@ async function submitReturn() {
     closeReturnModal();
     await loadData();
     render('history');
-    const statusNote = result.refundStatus === 'PENDING_PROVIDER' ? '\nThe refund is recorded as pending. It has not been sent to the card/online provider automatically.' : '';
-    alert(`Return recorded: ${result.returnNumber}\nRefund amount: ${money(result.refundAmount)}${statusNote}`);
+    const statusNote = result.refundStatus === 'PENDING_PROVIDER' ? '\n\nThe refund is recorded as pending. It has not been sent to the card/online provider automatically.' : '';
+    showPopup(`Return number: ${result.returnNumber}\nRefund amount: ${money(result.refundAmount)}${statusNote}`, { title: 'Return / refund recorded', type: 'success', okText: 'Done' });
   } catch (err) {
     showError(err.message);
     if (button) { button.disabled = false; button.textContent = 'Record return / refund'; }

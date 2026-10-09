@@ -27,6 +27,7 @@ FEATURES
 - Native camera detection supports whatever QR/barcode formats the browser advertises. Local fallback supports SaleSync-generated QR labels and Code 39; manual entry remains available.
 - Barcode labels support QR or Code 39, preview, PNG download, and printing 1–200 copies.
 - Category Management, Daily Sales category filtering, cashier receipt search, and Return / Refund stay available.
+- System feedback and confirmations use SaleSync in-app popup dialogs, including Return / Refund completion, checkout errors, invalid vouchers, barcode-label errors, product errors, and expense deletion confirmation. No native browser alert/confirm/prompt dialogs are used.
 - Return period and refund-method options are validated by the PHP API, not only hidden in the interface.
 - PayMongo provider refunds are not automatically submitted by this version. Original-method refund records can be pending/manual.
 

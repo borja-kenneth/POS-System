@@ -1730,3 +1730,21 @@ body.checkout-scan-mode .pos-products { overflow-y: auto; }
 .expense-row-actions .s-btn { padding: .35rem .5rem; font-size: .72rem; }
 .expense-manager-note { margin: .85rem 0; }
 @media (max-width: 640px) { .expense-editor-grid { grid-template-columns: 1fr; } .expense-description-field { grid-column: auto; } }
+
+
+/* Unified in-app feedback dialogs: replaces native browser alert/confirm dialogs. */
+.app-feedback-overlay { z-index: 300; }
+.app-feedback-card { width: min(480px, 100%); padding: 1.35rem; }
+.app-feedback-heading { display: flex; align-items: flex-start; gap: .85rem; margin-bottom: .8rem; }
+.app-feedback-heading-text { flex: 1; min-width: 0; }
+.app-feedback-heading-text h2 { margin: .15rem 0 0; font-size: 1.15rem; line-height: 1.35; }
+.app-feedback-symbol { width: 40px; height: 40px; flex: 0 0 40px; display: grid; place-items: center; border-radius: 50%; background: color-mix(in srgb, var(--accent) 11%, white); color: var(--accent); font-weight: 850; font-size: 1.25rem; }
+.app-feedback-card[data-tone="success"] .app-feedback-symbol { background: color-mix(in srgb, #16794B 13%, white); color: #16794B; }
+.app-feedback-card[data-tone="warning"] .app-feedback-symbol { background: color-mix(in srgb, #B08A2E 15%, white); color: #876719; }
+.app-feedback-card[data-tone="error"] .app-feedback-symbol,
+.app-feedback-card[data-tone="danger"] .app-feedback-symbol { background: color-mix(in srgb, #B42318 12%, white); color: #B42318; }
+.app-feedback-message { margin: .7rem 0 1rem; color: var(--ink); font-size: .9rem; line-height: 1.6; white-space: pre-line; overflow-wrap: anywhere; }
+.app-feedback-actions { gap: .6rem; }
+#appFeedbackOkay.danger { background: #B42318; color: #fff; border-color: #B42318; }
+#appFeedbackOkay.danger:hover { background: #8F1C13; }
+.app-feedback-card :is(button, input, select, textarea):focus-visible { outline: 3px solid color-mix(in srgb, var(--accent2) 65%, white); outline-offset: 2px; }
