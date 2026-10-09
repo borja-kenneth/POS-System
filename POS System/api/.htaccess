@@ -1,9 +1,0 @@
-RewriteEngine On
-
-# Keep real files/directories working normally.
-RewriteCond %{REQUEST_FILENAME} -f [OR]
-RewriteCond %{REQUEST_FILENAME} -d
-RewriteRule ^ - [L]
-
-# Send /api/... requests to the PHP API router.
-RewriteRule ^(.+)$ index.php?route=$1 [QSA,L]
