@@ -78,6 +78,7 @@
       <form id="addProductForm" class="modal-form" onsubmit="event.preventDefault(); submitAddProduct()">
         <label>Product name<input id="addProductName" required maxlength="150" placeholder="e.g. Oat Milk 1L"></label>
         <label>Category<select id="addProductCategory" required></select></label>
+        <label>Barcode (optional)<input id="addProductBarcode" maxlength="64" autocomplete="off" placeholder="Leave blank to generate automatically"><span class="form-help">SaleSync generates a unique barcode when you leave this blank. You can print product labels from Product Management.</span></label>
         <div class="form-two-col">
           <label>Cost<input id="addProductCost" type="number" min="0" step="0.01" value="0" required></label>
           <label>Price<input id="addProductPrice" type="number" min="0" step="0.01" value="0" required></label>
@@ -93,6 +94,68 @@
       </form>
     </div>
   </div>
+
+  <div class="modal-overlay" id="categoryManagerModal" hidden>
+    <div class="modal-card category-manager-modal" role="dialog" aria-modal="true" aria-labelledby="categoryManagerTitle">
+      <div class="modal-head">
+        <div><div class="eyebrow">PRODUCT MANAGEMENT</div><h2 id="categoryManagerTitle">Manage categories</h2><p class="modal-subcopy">Add new product types here. Existing categories stay in past sales records.</p></div>
+        <button class="modal-close" type="button" onclick="closeCategoryManager()" aria-label="Close">×</button>
+      </div>
+      <form class="modal-form" onsubmit="event.preventDefault(); submitNewCategory()">
+        <label>New category name<input id="newCategoryName" maxlength="100" required placeholder="e.g. Frozen Foods"></label>
+        <div id="categoryManagerError" class="form-error" hidden></div>
+        <div class="modal-actions"><button class="btn" id="addCategorySubmit" type="submit">Add category</button></div>
+      </form>
+      <div class="category-manager-list-head"><strong>Current categories</strong><button class="s-btn" type="button" onclick="loadCategoryManagement()">Refresh</button></div>
+      <div id="categoryManagerList" class="category-manager-list"><div class="d-empty">Loading categories…</div></div>
+      <p class="form-help">Categories with active products cannot be deactivated until those products are moved to another category. Categories are not permanently deleted.</p>
+      <div class="modal-actions"><button class="btn secondary" type="button" onclick="closeCategoryManager()">Done</button></div>
+    </div>
+  </div>
+
+  <div class="modal-overlay" id="returnModal" hidden>
+    <div class="modal-card return-modal" role="dialog" aria-modal="true" aria-labelledby="returnTitle">
+      <div class="modal-head">
+        <div><div class="eyebrow">TRANSACTION HISTORY</div><h2 id="returnTitle">Return / refund</h2><p id="returnReceiptNumber" class="modal-subcopy">Loading receipt…</p></div>
+        <button class="modal-close" type="button" onclick="closeReturnModal()" aria-label="Close">×</button>
+      </div>
+      <div class="return-items" id="returnItems"><div class="d-empty">Loading receipt items…</div></div>
+      <form class="modal-form" onsubmit="event.preventDefault(); submitReturn()">
+        <label>Reason for return<textarea id="returnReason" rows="2" maxlength="255" required placeholder="e.g. Damaged, incorrect item, customer changed mind"></textarea></label>
+        <label>Refund method<select id="returnRefundMethod"><option value="CASH">Cash</option><option value="STORE_CREDIT">Store credit</option><option value="ORIGINAL_METHOD">Original payment method (manual/provider processing)</option></select></label>
+        <p class="form-help">Choosing the original card/online method records a pending refund. This version does not send a refund request to PayMongo automatically.</p>
+        <div class="return-total-row"><span>Estimated refund</span><strong id="returnEstimatedTotal">₱0.00</strong></div>
+        <div id="returnError" class="form-error" hidden></div>
+        <div class="modal-actions"><button class="btn secondary" type="button" onclick="closeReturnModal()">Cancel</button><button class="btn" id="returnSubmit" type="submit">Record return / refund</button></div>
+      </form>
+    </div>
+  </div>
+
+
+  <div class="modal-overlay" id="barcodePrintModal" hidden>
+    <div class="modal-card barcode-print-modal" role="dialog" aria-modal="true" aria-labelledby="barcodePrintTitle">
+      <div class="modal-head">
+        <div><div class="eyebrow">PRODUCT MANAGEMENT</div><h2 id="barcodePrintTitle">Product labels</h2><p id="barcodePrintProductMeta" class="modal-subcopy">Barcode or QR label preview</p></div>
+        <button class="modal-close" type="button" onclick="closeBarcodePrint()" aria-label="Close">×</button>
+      </div>
+      <div class="modal-form barcode-label-controls">
+        <label>Label type<select id="barcodeLabelType" onchange="setBarcodeLabelType(this.value)"><option value="CODE39">Traditional barcode (Code 39)</option><option value="QR">QR code</option></select><span class="form-help">Both labels encode the product's assigned barcode. QR scanning requires a browser with native QR detection; Code 39 has a local fallback decoder.</span></label>
+      </div>
+      <div id="barcodeLabelPreview" class="barcode-label-preview"></div>
+      <p class="form-help barcode-test-tip">To test scanning without a label printer, download the PNG and display it on a second phone or screen. Then open Checkout → Scan and point the camera at that screen. A camera cannot scan the image displayed on the same screen it is using.</p>
+      <div class="modal-form">
+        <label>How many labels would you like to print?<input id="barcodeLabelCopies" type="number" min="1" max="200" step="1" value="1" oninput="updateBarcodePrintPreview()"><span class="form-help">Choose from 1 to 200 copies. The preview shows one label; Print labels prints the selected quantity.</span></label>
+        <div id="barcodePrintError" class="form-error" hidden></div>
+        <div class="modal-actions barcode-print-actions">
+          <button class="btn secondary" type="button" onclick="downloadBarcodePng()">Download PNG</button>
+          <button class="btn secondary" type="button" onclick="closeBarcodePrint()">Cancel</button>
+          <button class="btn" type="button" id="barcodePrintButton" onclick="printBarcodeLabels()">Print labels</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="barcodePrintSheet" class="barcode-print-sheet" hidden aria-hidden="true"></div>
 
   <div class="modal-overlay" id="restockModal" hidden>
     <div class="modal-card restock-modal" role="dialog" aria-modal="true" aria-labelledby="restockTitle">
@@ -143,6 +206,37 @@
   </div>
 
   <script src="js/app.js"></script>
+
+  <div class="modal-overlay" id="expenseManagerModal" hidden>
+    <div class="modal-card expense-manager-modal" role="dialog" aria-modal="true" aria-labelledby="expenseManagerTitle">
+      <div class="modal-head">
+        <div><div class="eyebrow">PROFIT &amp; LOSS</div><h2 id="expenseManagerTitle">Manage expenses</h2><p class="modal-subcopy">Add, correct, or remove operating-expense records. Each expense belongs to the date entered.</p></div>
+        <button class="modal-close" type="button" onclick="closeExpenseManager()" aria-label="Close">×</button>
+      </div>
+      <section class="expense-manager-editor" aria-labelledby="expenseEditorTitle">
+        <h3 id="expenseEditorTitle">Add an expense</h3>
+        <form class="expense-editor-form" onsubmit="event.preventDefault(); submitExpenseRecord()">
+          <div class="expense-editor-grid">
+            <label>Category<input id="expenseCategoryInput" maxlength="100" list="expenseCategorySuggestions" required placeholder="e.g. Rent, Electricity, Internet"></label>
+            <datalist id="expenseCategorySuggestions"><option value="Rent"><option value="Electricity"><option value="Water"><option value="Internet"><option value="Wages"><option value="Supplies"><option value="Maintenance"><option value="Transport"></datalist>
+            <label>Amount (₱)<input id="expenseAmountInput" type="number" min="0.01" max="9999999999.99" step="0.01" required placeholder="0.00"></label>
+            <label>Date<input id="expenseDateInput" type="date" required></label>
+            <label class="expense-description-field">Description (optional)<input id="expenseDescriptionInput" maxlength="255" placeholder="e.g. October monthly rent"></label>
+          </div>
+          <p id="expenseFormFeedback" class="expense-form-feedback" role="status" aria-live="polite"></p>
+          <div class="modal-actions expense-editor-actions">
+            <button class="s-btn" id="expenseCancelEditBtn" type="button" onclick="resetExpenseForm()" hidden>Cancel edit</button>
+            <button class="s-btn pri" id="expenseSaveBtn" type="submit">Add expense</button>
+          </div>
+        </form>
+      </section>
+      <div class="expense-manager-list-heading"><div><h3>Expense records</h3><p>Most recent records first</p></div><button class="s-btn" type="button" onclick="renderExpenseManagerList()">Refresh list</button></div>
+      <div id="expenseManagerList" class="expense-manager-list"><div class="d-empty">Loading expense records…</div></div>
+      <p class="form-help expense-manager-note">For changing monthly costs, add a separate dated expense for each month—for example, July rent and August rent. Edit a record when correcting that specific entry. Past months remain separate.</p>
+      <div class="modal-actions"><button class="btn secondary" type="button" onclick="closeExpenseManager()">Done</button></div>
+    </div>
+  </div>
+
 </body>
 
 </html>

@@ -1501,3 +1501,232 @@ body.role-admin main#main { background: #EEF5FA; }
   body, .app-shell, .app-body, main#main { display: block !important; height: auto !important; overflow: visible !important; background: #fff !important; }
   .card { break-inside: avoid; }
 }
+
+
+/* SaleSync enhancements: barcode search, category management, and returns */
+.checkout-search { min-width: min(420px, 48vw); }
+.checkout-search input { min-width: 0; padding-right: .3rem; }
+.scan-btn { flex: 0 0 auto; position: relative; z-index: 2; display: inline-flex; align-items: center; justify-content: center; gap: .38rem; padding: .54rem .72rem; border: 1px solid var(--line); border-radius: 8px; background: #fff; color: var(--accent); font-size: .74rem; font-weight: 800; cursor: pointer; white-space: nowrap; }
+.scan-icon { width: 16px; height: 16px; display: block; flex: 0 0 16px; }
+.scan-btn:hover { background: color-mix(in srgb, var(--accent) 6%, white); border-color: var(--accent); }
+.barcode-input { min-width: 125px; width: 135px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.sales-category-select { min-width: 150px; }
+.sales-row-actions { display: flex; flex-wrap: wrap; gap: .35rem; align-items: center; }
+.cashier-row-actions { flex-direction: column; flex-wrap: nowrap; align-items: stretch; min-width: 128px; }
+.cashier-row-actions .btn { width: 100%; justify-content: center; white-space: nowrap; }
+.return-summary { display: block; margin-top: .2rem; color: var(--sub); font-size: .68rem; white-space: nowrap; }
+.s-btn.disabled, .s-btn:disabled, .btn:disabled { opacity: .45; cursor: not-allowed; }
+.category-manager-modal { width: min(650px, 100%); }
+.category-manager-list-head { display: flex; align-items: center; justify-content: space-between; gap: .7rem; margin-top: 1.2rem; padding: .6rem 0; border-bottom: 1px solid var(--line); }
+.category-manager-list { display: grid; gap: 0; max-height: min(300px, 34vh); overflow-y: auto; }
+.category-manage-row { display: flex; align-items: center; gap: .6rem; padding: .7rem 0; border-bottom: 1px solid var(--line); }
+.category-manage-name { flex: 1; min-width: 0; display: grid; gap: .15rem; }
+.category-manage-name strong { overflow-wrap: anywhere; font-size: .8rem; }
+.category-manage-name span { color: var(--sub); font-size: .68rem; }
+.barcode-modal { width: min(560px, 100%); }
+.barcode-video { width: 100%; max-height: 310px; object-fit: cover; background: #111; border-radius: 10px; margin: 0 0 .8rem; }
+.barcode-video[hidden] { display: none; }
+.scanner-message { font-size: .78rem; line-height: 1.5; border-radius: 8px; padding: .65rem .75rem; margin-bottom: .8rem; background: color-mix(in srgb, var(--accent) 6%, white); color: var(--ink); }
+.return-modal { width: min(740px, 100%); }
+.return-items { display: grid; max-height: min(340px, 36vh); overflow-y: auto; border-top: 1px solid var(--line); margin-bottom: 1rem; }
+.return-item-row { display: grid; grid-template-columns: minmax(0, 1fr) 80px; gap: .4rem .9rem; padding: .8rem 0; border-bottom: 1px solid var(--line); align-items: center; }
+.return-item-title { min-width: 0; display: grid; gap: .18rem; }
+.return-item-title strong { font-size: .83rem; }
+.return-item-title span, .return-item-title small { color: var(--sub); font-size: .68rem; }
+.return-qty-field { display: grid; gap: .22rem; font-size: .68rem; color: var(--sub); font-weight: 700; }
+.return-qty-field input { width: 100%; }
+.return-restock-field { grid-column: 1 / -1; display: flex; align-items: center; gap: .4rem; color: var(--sub); font-size: .7rem; }
+.return-restock-field input { width: auto; }
+.return-total-row { display: flex; align-items: center; justify-content: space-between; padding: .8rem .9rem; border: 1px solid var(--line); border-radius: 9px; background: #fafafa; font-size: .8rem; }
+.return-total-row strong { font-size: 1.1rem; color: var(--accent); }
+.modal-form textarea { width: 100%; min-height: 68px; resize: vertical; font: inherit; padding: .65rem .75rem; border: 1px solid var(--line); border-radius: 8px; color: var(--ink); }
+@media(max-width:900px) {
+  .checkout-search { min-width: min(360px, 55vw); }
+}
+@media(max-width:600px) {
+  .checkout-search { min-width: 100%; }
+  .category-manage-row { flex-wrap: wrap; }
+  .category-manage-name { flex-basis: 100%; }
+  .return-item-row { grid-template-columns: minmax(0,1fr) 70px; }
+  .sales-category-select { min-width: 100%; width: 100%; }
+}
+
+/* Focused tables: keep headers, cells, inputs and actions within the same column. */
+.inventory-table { table-layout: fixed; border-collapse: collapse; }
+.inventory-table-products { width: 100%; min-width: 1120px; max-width: 100%; }
+.inventory-table-stock { width: 100%; min-width: 900px; max-width: 100%; }
+.inventory-table th, .inventory-table td { overflow: hidden; text-overflow: ellipsis; vertical-align: middle; }
+.inventory-table th { white-space: nowrap; padding: .55rem .42rem; }
+.inventory-table td { padding: .55rem .42rem; }
+.inventory-table-products .barcode-input,
+.inventory-table-products select,
+.inventory-table-products td input.i-in { box-sizing: border-box; width: 100%; min-width: 0; max-width: 100%; }
+.inventory-table-products td input.i-in.num { text-align: right; }
+.inventory-table-products .inv-row-actions { display: flex; align-items: center; gap: .3rem; white-space: normal; }
+.inventory-table-products .inv-row-actions .s-btn { padding: .38rem .48rem; font-size: .71rem; }
+.inventory-table-products td.action-cell { overflow: visible; }
+.inventory-table-stock td.action-cell { white-space: nowrap; }
+
+/* Cashier receipt search is visible above the transaction table. */
+.cashier-receipt-search { display: flex; align-items: center; gap: .6rem; margin: .75rem 0 1rem; }
+.cashier-receipt-search .search-wrap { flex: 1; min-width: 0; }
+.cashier-receipt-search input { min-width: 0; width: 100%; }
+.cashier-transactions-table { width: 100%; min-width: 900px; border-collapse: collapse; table-layout: auto; font-size: .84rem; }
+.cashier-transactions-table th { text-align: left; color: var(--sub); font-size: .72rem; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; padding: .6rem .65rem; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.cashier-transactions-table td { padding: .7rem .65rem; border-bottom: 1px solid #E3EAF0; vertical-align: middle; }
+.cashier-transactions-table th:nth-child(1) { min-width: 170px; }
+.cashier-transactions-table th:nth-child(3) { min-width: 185px; }
+.cashier-transactions-table th:last-child, .cashier-transactions-table td:last-child { min-width: 205px; }
+
+/* Locally generated barcode previews and print sheets. */
+.barcode-print-modal { width: min(600px, 100%); }
+.barcode-label-preview { display: grid; place-items: center; padding: 1rem; background: #f6f8fb; border: 1px dashed var(--line); border-radius: 10px; margin-bottom: 1rem; }
+.barcode-label-card { display: grid; gap: .3rem; width: min(360px, 100%); padding: .7rem; background: #fff; color: #111; border: 1px solid #d4d9df; border-radius: 4px; text-align: center; }
+.barcode-label-card strong { font-size: .78rem; overflow-wrap: anywhere; }
+.barcode-label-card svg { display: block; width: 100%; height: auto; max-height: 110px; shape-rendering: crispEdges; }
+.barcode-label-card > span { font: .68rem ui-monospace, SFMono-Regular, Consolas, monospace; }
+.barcode-print-sheet { display: none; }
+.barcode-print-label { color: #000; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1.2mm; border: .2mm solid #d6d6d6; border-radius: 1mm; padding: 2mm; text-align: center; min-width: 0; break-inside: avoid; overflow: hidden; }
+.barcode-print-label strong { font: 700 8pt Arial, sans-serif; max-width: 100%; overflow-wrap: anywhere; }
+.barcode-print-label svg { display: block; width: 100%; height: 18mm; max-width: 100%; shape-rendering: crispEdges; }
+.barcode-print-label span { font: 7pt ui-monospace, Consolas, monospace; }
+body.printing-barcodes { background: #fff !important; }
+@media print {
+  @page { size: auto; margin: 7mm; }
+  body.printing-barcodes > *:not(#barcodePrintSheet) { display: none !important; }
+  body.printing-barcodes #barcodePrintSheet { display: grid !important; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3mm; align-content: start; width: 100%; }
+  body.printing-barcodes #barcodePrintSheet .barcode-print-label { display: flex !important; min-height: 30mm; }
+  body.printing-barcodes #barcodePrintSheet svg { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+}
+@media (max-width: 700px) {
+  .cashier-receipt-search { align-items: stretch; flex-direction: column; }
+  .cashier-receipt-search .s-btn { align-self: flex-start; }
+  .inventory-table-products, .inventory-table-stock { margin-bottom: .2rem; }
+}
+
+.barcode-test-tip { margin: -.2rem 0 1rem; }
+
+/* QR label preview: retain clear quiet-zone and crisp modules. */
+.barcode-label-card.qr-label-card svg { width: min(210px, 100%); max-width: 100%; max-height: none; height: auto; display: block; margin: 8px auto; }
+.barcode-label-controls { margin-bottom: 10px; }
+
+
+/* SaleSync settings page */
+.settings-page { display: grid; gap: 1rem; padding-bottom: 1rem; }
+.settings-card .a-hd { margin-bottom: 1rem; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .9rem 1rem; }
+.settings-grid > label { min-width: 0; display: grid; gap: .35rem; color: var(--ink); font-size: .78rem; font-weight: 650; }
+.settings-grid input, .settings-grid select { width: 100%; min-width: 0; }
+.settings-grid small { display: block; color: var(--sub); font-weight: 400; font-size: .7rem; line-height: 1.45; }
+.settings-full { grid-column: 1 / -1; }
+.settings-checks { display: grid; gap: .65rem; align-content: start; }
+.settings-checks > strong { font-size: .78rem; margin-bottom: .1rem; }
+.settings-check { display: flex; gap: .55rem; align-items: flex-start; color: var(--ink); font-size: .78rem; cursor: pointer; }
+.settings-check input { width: 16px; min-width: 16px; margin-top: .12rem; }
+.settings-check span { display: grid; gap: .12rem; }
+.settings-check small { color: var(--sub); font-weight: 400; font-size: .68rem; line-height: 1.4; }
+.settings-savebar { display: flex; align-items: center; justify-content: flex-end; gap: .6rem; position: sticky; bottom: .5rem; background: color-mix(in srgb, var(--bg) 92%, transparent); border: 1px solid var(--line); border-radius: 10px; padding: .7rem; z-index: 2; }
+#settingsFeedback { margin-right: auto; font-size: .76rem; color: var(--good); }
+/* Inline checkout Scan Mode: scanner replaces product cards, not the current-sale cart */
+.pos-scan-mode { min-width: 0; }
+.pos-scan-mode[hidden], #posBrowseMode[hidden] { display: none !important; }
+.scan-mode-head { margin-bottom: .85rem; }
+.scanner-live-wrap { position: relative; min-height: 180px; background: #111827; border-radius: 10px; overflow: hidden; display: grid; place-items: center; }
+.scanner-live-wrap .barcode-video { margin: 0; width: 100%; height: clamp(190px, 34vh, 360px); max-height: none; object-fit: cover; border-radius: 0; }
+.scanner-live-wrap .barcode-video[hidden] { display: none; }
+.scanner-placeholder { color: #e5e7eb; display: grid; justify-items: center; gap: .4rem; text-align: center; padding: 2rem 1rem; }
+.scanner-placeholder[hidden] { display: none; }
+.scanner-placeholder strong { font-size: .9rem; }
+.scanner-placeholder span:not(.scanner-placeholder-icon) { color: #b8c1cd; font-size: .75rem; }
+.scanner-placeholder-icon { font-size: 2rem; line-height: 1; }
+.scanner-message { overflow-wrap: anywhere; }
+.scanner-message.success { background: #eaf7ef; color: #17663a; }
+.scanner-message.error { background: #fff0ed; color: #9c2b19; }
+.scan-manual-form { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: .7rem; align-items: end; margin-top: .9rem; }
+.scan-manual-form label { display: grid; gap: .35rem; color: var(--ink); font-size: .78rem; font-weight: 650; min-width: 0; }
+.scan-manual-form input { width: 100%; min-width: 0; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.scan-mode-tip { margin-top: .8rem; color: var(--sub); font-size: .7rem; line-height: 1.45; }
+body.checkout-scan-mode .pos-products { overflow-y: auto; }
+.receipt-footer { margin-top: .8rem; text-align: center; font-size: .74rem; }
+@media (max-width: 900px) {
+  .settings-grid { gap: .8rem; }
+}
+@media (max-width: 600px) {
+  .settings-grid { grid-template-columns: 1fr; }
+  .settings-full { grid-column: auto; }
+  .settings-savebar { flex-wrap: wrap; }
+  #settingsFeedback { flex-basis: 100%; }
+  .scan-manual-form { grid-template-columns: 1fr; }
+}
+
+@media(min-width: 601px) {
+  body.checkout-mode #posBrowseMode { display:flex; flex:1 1 auto; min-height:0; flex-direction:column; }
+  body.checkout-mode #posBrowseMode .pos-grid { flex:1 1 auto; min-height:0; max-height:none; overflow-y:auto; }
+  body.checkout-mode #posBrowseMode .pos-cats, body.checkout-mode #posBrowseMode .section-head { flex:0 0 auto; }
+  body.checkout-mode #posScanMode { flex:1 1 auto; min-height:0; }
+}
+
+.settings-password-grid { align-items: end; }
+.settings-password-action { display: flex; align-items: center; justify-content: flex-end; gap: .65rem; min-width: 0; }
+#passwordFeedback { color: var(--good); font-size: .74rem; overflow-wrap: anywhere; margin-right: auto; }
+
+
+/* Startup recovery screen: keep API/database errors from bouncing between
+   index.html and login.html when the user still has a valid session. */
+#loginScreen.startup-problem {
+  min-height: 100vh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: var(--bg);
+}
+.startup-problem-card {
+  width: min(560px, 100%);
+  padding: clamp(24px, 4vw, 38px);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: var(--panel);
+  box-shadow: 0 18px 48px rgba(30, 42, 56, .08);
+}
+.startup-problem-mark {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  margin-bottom: 18px;
+  border-radius: 50%;
+  background: #fff2df;
+  color: #8c5c13;
+  font-size: 24px;
+  font-weight: 800;
+}
+.startup-problem-card .eyebrow { color: var(--accent); font-size: .75rem; font-weight: 800; letter-spacing: .12em; }
+.startup-problem-card h1 { margin: 8px 0 12px; color: var(--ink); font-size: clamp(1.35rem, 4vw, 1.8rem); }
+.startup-problem-card > p:not(.eyebrow) { color: var(--sub); line-height: 1.6; }
+.startup-problem-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 22px; }
+.startup-problem-help { margin-top: 22px; padding-top: 14px; border-top: 1px solid var(--line); font-size: .85rem; overflow-wrap: anywhere; }
+.startup-problem-help code { color: var(--accent); }
+
+
+/* P&L operating expense manager */
+.expense-manager-modal { width: min(960px, 100%); }
+.expense-manager-editor { border: 1px solid var(--line); border-radius: 12px; padding: 1rem; background: #FAFBFD; margin: .5rem 0 1.25rem; }
+.expense-manager-editor h3, .expense-manager-list-heading h3 { margin: 0; font-size: .96rem; }
+.expense-editor-form { display: grid; gap: .7rem; margin-top: .8rem; }
+.expense-editor-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+.expense-editor-grid label { display: grid; gap: .35rem; font-size: .76rem; font-weight: 700; }
+.expense-editor-grid input { width: 100%; min-width: 0; }
+.expense-description-field { grid-column: 1 / -1; }
+.expense-form-feedback { margin: 0; color: var(--sub); font-size: .78rem; min-height: 1rem; }
+.expense-form-feedback.error { color: #B42318; }
+.expense-form-feedback.success { color: #16794B; }
+.expense-editor-actions { margin-top: 0; }
+.expense-manager-list-heading { display: flex; justify-content: space-between; align-items: center; gap: .8rem; margin: 1rem 0 .65rem; }
+.expense-manager-list-heading p { margin: .18rem 0 0; font-size: .76rem; color: var(--sub); }
+.expense-manager-table-wrap { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 10px; }
+.expense-manager-table { min-width: 670px; }
+.expense-manager-table td, .expense-manager-table th { vertical-align: middle; }
+.expense-row-actions { display: flex; flex-wrap: nowrap; gap: .35rem; }
+.expense-row-actions .s-btn { padding: .35rem .5rem; font-size: .72rem; }
+.expense-manager-note { margin: .85rem 0; }
+@media (max-width: 640px) { .expense-editor-grid { grid-template-columns: 1fr; } .expense-description-field { grid-column: auto; } }
