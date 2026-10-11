@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Sign in · SaleSync</title>
+  <link rel="icon" type="image/png" href="assets/img/logo-mark.png">
+  <link rel="stylesheet" href="css/login.css">
+</head>
+<body>
+  <div class="bg-circle c1"></div>
+  <div class="bg-circle c2"></div>
+
+  <main class="shell">
+    <section class="panel" aria-hidden="true">
+      <div>
+        <div class="logo-tile"><img src="assets/img/logo-mark.png" alt=""></div>
+        <h2>Sell faster.<br>Stay in sync.</h2>
+        <p>One place for checkout, stock, sales records and reports, for the whole store.</p>
+      </div>
+      <div class="chips">
+        <span class="chip">Central stock</span>
+        <span class="chip">Daily sales ledger</span>
+        <span class="chip">Analytics</span>
+        <span class="chip">Reports</span>
+      </div>
+    </section>
+
+    <section class="form-side">
+      <div class="brand"><img src="assets/img/logo-mark.png" alt="">Sale<span>Sync</span></div>
+      <h1>Welcome back</h1>
+      <p class="sub">Sign in with your admin or cashier account to continue.</p>
+
+      <div id="loginError" class="error" role="alert" hidden></div>
+
+      <form id="loginForm" novalidate>
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" autocomplete="username" placeholder="Enter your username" required>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <div class="pw">
+            <input id="password" type="password" autocomplete="current-password" placeholder="Enter your password" required>
+            <button type="button" id="pwToggle" class="toggle" aria-label="Show password" aria-pressed="false">
+              <svg class="on" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>
+              <svg class="off" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.9 17.9A10.9 10.9 0 0 1 12 19c-6.4 0-10-7-10-7a18.7 18.7 0 0 1 5.1-5.9M9.9 5.2A10 10 0 0 1 12 5c6.4 0 10 7 10 7a18.5 18.5 0 0 1-2.2 3.2M1 1l22 22"/><path d="M14.1 14.1a3 3 0 1 1-4.2-4.2"/></svg>
+            </button>
+          </div>
+        </div>
+        <button class="btn" id="loginBtn" type="submit">Sign in</button>
+      </form>
+
+      <div class="demo">
+        Demo accounts, tap to fill:
+        <div class="demo-row">
+          <button type="button" data-u="admin" data-p="admin123">Admin</button>
+          <button type="button" data-u="cashier" data-p="cashier123">Cashier</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="js/login.js"></script>
+</body>
+</html>
