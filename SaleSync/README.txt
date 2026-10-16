@@ -16,6 +16,14 @@ FRESH / DEMO INSTALLATION
 7. Open http://localhost/SaleSync/login.html. If you used a different folder name, use that folder name in the URL.
 8. Optional health check: http://localhost/SaleSync/api/index.php?route=health . Expected JSON includes {"ok":true,"database":"salesync"}.
 
+SHOPHUB CONNECTION (OPTIONAL, TWO COMPUTERS)
+1. With the SaleSync database imported and XAMPP running, import api\ecommerce\schema.sql into the existing `salesync` database once. It adds only ShopHub order/reservation tracking tables.
+2. Copy api\ecommerce\config.example.php to api\ecommerce\config.local.php and set a long random `api_key`. Keep this private. ShopHub's server\.env must contain the exact same key.
+3. On the SaleSync computer, use `ipconfig` to find its Wi-Fi/Ethernet IPv4 address. The ShopHub computer must use that address, not `localhost`, in `SALESYNC_API_URL`.
+4. Allow Apache through Windows Firewall on Private networks if prompted. Keep both computers on the same trusted local network; do not expose the connector to the public internet.
+5. In ShopHub's server\.env, set `SALESYNC_API_URL=http://<SaleSync-IP>/SaleSync/api/ecommerce/index.php` and `SALESYNC_API_KEY=<the-same-secret>`.
+6. ShopHub reads this POS's product list and stock. A placed order reserves stock; an uncompleted cancellation releases it. Marking delivery Completed consumes the stock and saves a SaleSync transaction marked ECOMMERCE. The first connector version accepts Cash on Delivery only.
+
 DEMO ACCOUNTS
 - Admin: admin / admin123
 - Cashier: cashier / cashier123
